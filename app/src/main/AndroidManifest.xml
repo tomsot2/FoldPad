@@ -1,15 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Overlay permission for drawing on top of other apps -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    <!-- Foreground service permissions -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <!-- Query installed apps for the picker -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
-    <!-- Vibration for button feedback -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Required on Android 13+ to show the persistent foreground service notification -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
@@ -19,7 +17,6 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.FoldGamepad">
 
-        <!-- Main hub activity - landscape locked to inner screen -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -31,14 +28,12 @@
             </intent-filter>
         </activity>
 
-        <!-- App picker activity -->
         <activity
             android:name=".AppPickerActivity"
             android:exported="false"
             android:screenOrientation="landscape"
             android:configChanges="orientation|screenSize|screenLayout" />
 
-        <!-- Accessibility service for gesture injection -->
         <service
             android:name=".service.FoldAccessibilityService"
             android:exported="true"
@@ -52,7 +47,6 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- Overlay foreground service -->
         <service
             android:name=".service.OverlayService"
             android:exported="false"
