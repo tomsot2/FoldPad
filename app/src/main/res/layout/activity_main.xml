@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_dark"
+    android:padding="24dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center_horizontal">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="FoldGamepad"
+            android:textColor="@color/cyan_accent"
+            android:textSize="32sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="4dp"/>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Galaxy Z Fold overlay controller"
+            android:textColor="#99FFFFFF"
+            android:textSize="14sp"
+            android:layout_marginBottom="28dp"/>
+
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="20dp"
+            app:cardBackgroundColor="@color/card_bg"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="0dp"
+            xmlns:app="http://schemas.android.com/apk/res-auto">
+
+            <TextView
+                android:id="@+id/tv_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:padding="16dp"
+                android:textColor="#CCFFFFFF"
+                android:textSize="14sp"
+                android:text="Checking permissions…"/>
+        </androidx.cardview.widget.CardView>
+
+        <Button
+            android:id="@+id/btn_overlay_perm"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginBottom="12dp"
+            android:backgroundTint="@color/btn_blue"
+            android:text="1. Grant overlay permission"
+            android:textColor="@android:color/white"
+            android:textStyle="bold"/>
+
+        <Button
+            android:id="@+id/btn_accessibility"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginBottom="12dp"
+            android:backgroundTint="@color/btn_blue"
+            android:text="2. Enable accessibility service"
+            android:textColor="@android:color/white"
+            android:textStyle="bold"/>
+
+        <Button
+            android:id="@+id/btn_pick_game"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginBottom="4dp"
+            android:backgroundTint="@color/btn_teal"
+            android:text="3. Pick a game"
+            android:textColor="@android:color/white"
+            android:textStyle="bold"/>
+
+        <TextView
+            android:id="@+id/tv_current_game"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:paddingBottom="16dp"
+            android:textColor="#99FFFFFF"
+            android:textSize="13sp"
+            android:text="No game selected"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center">
+
+            <Button
+                android:id="@+id/btn_start_overlay"
+                android:layout_width="0dp"
+                android:layout_height="52dp"
+                android:layout_weight="1"
+                android:layout_marginEnd="8dp"
+                android:backgroundTint="@color/btn_green"
+                android:text="▶ Start Overlay"
+                android:textColor="@android:color/white"
+                android:textStyle="bold"/>
+
+            <Button
+                android:id="@+id/btn_stop_overlay"
+                android:layout_width="0dp"
+                android:layout_height="52dp"
+                android:layout_weight="1"
+                android:layout_marginStart="8dp"
+                android:backgroundTint="@color/btn_red"
+                android:text="■ Stop Overlay"
+                android:textColor="@android:color/white"
+                android:textStyle="bold"/>
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:textColor="#66FFFFFF"
+            android:textSize="12sp"
+            android:gravity="center"
+            android:text="Once the overlay is running, use the persistent notification\nto open Edit Layout, switch to Cover Mode, or stop."/>
+
+    </LinearLayout>
+</ScrollView>

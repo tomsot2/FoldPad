@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">FoldGamepad</string>
+    <string name="accessibility_service_label">FoldGamepad Input Injector</string>
+    <string name="accessibility_service_description">Allows FoldGamepad to inject tap and gesture inputs into games on behalf of your button panel. No screen content is read or recorded.</string>
+</resources>

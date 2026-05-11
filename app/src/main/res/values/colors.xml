@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_dark">#0A0A12</color>
+    <color name="card_bg">#1A1A26</color>
+    <color name="cyan_accent">#00D2FF</color>
+    <color name="btn_blue">#1E6FA8</color>
+    <color name="btn_teal">#0D8A7A</color>
+    <color name="btn_green">#1A7A3A</color>
+    <color name="btn_red">#8A1A2A</color>
+</resources>
