@@ -1,5 +1,6 @@
 package com.foldgamepad.util
 
+import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.os.Handler
@@ -8,10 +9,10 @@ import com.foldgamepad.service.FoldAccessibilityService
 
 object InputInjector {
 
-    /** Set by FoldAccessibilityService when it connects/disconnects. */
     @Volatile var service: FoldAccessibilityService? = null
-
     val isReady get() = service != null
+
+    private val handler = Handler(Looper.getMainLooper())
 
     // ── Tap ──────────────────────────────────────────────────────────────────
 
@@ -22,51 +23,91 @@ object InputInjector {
         svc.dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
     }
 
-    // ── Joystick ─────────────────────────────────────────────────────────────
-    // While a joystick is held we repeatedly dispatch short swipe gestures from
-    // the mapped centre point toward the mapped direction. 80 ms interval feels
-    // responsive without flooding the input pipeline.
+    // ── Continuous joystick (hold-and-drag) ───────────────────────────────────
+    // Uses continueStroke so the game sees one unbroken ACTION_DOWN → ACTION_MOVE
+    // sequence rather than repeated taps.
 
-    private val joystickHandler = Handler(Looper.getMainLooper())
-    private var joystickRunnable: Runnable? = null
+    private var joystickActive   = false
+    private var currentTX        = 0f
+    private var currentTY        = 0f
+    private var lastTX           = 0f
+    private var lastTY           = 0f
+    private var currentStroke: GestureDescription.StrokeDescription? = null
 
-    /** Call once when the joystick thumb first moves off-centre. */
-    fun startJoystick(
-        centreX: Int,
-        centreY: Int,
-        gameRadius: Int,
-        getDelta: () -> Pair<Float, Float>   // live callback: (dx, dy) in -1..1
-    ) {
-        stopJoystick()
-        joystickRunnable = object : Runnable {
-            override fun run() {
-                val (dx, dy) = getDelta()
-                if (dx != 0f || dy != 0f) {
-                    dispatchJoystickSwipe(centreX, centreY, dx, dy, gameRadius)
-                }
-                joystickHandler.postDelayed(this, 80L)
+    private val joystickCallback = object : AccessibilityService.GestureResultCallback() {
+        override fun onCompleted(gestureDescription: GestureDescription) {
+            if (!joystickActive) return
+            val svc = service ?: return
+            val stroke = currentStroke ?: return
+            // Continue from last position to wherever the thumb is now
+            val path = Path().apply {
+                moveTo(lastTX, lastTY)
+                lineTo(currentTX, currentTY)
             }
+            lastTX = currentTX
+            lastTY = currentTY
+            currentStroke = stroke.continueStroke(path, 0L, STROKE_MS, true)
+            svc.dispatchGesture(
+                GestureDescription.Builder().addStroke(currentStroke!!).build(),
+                this, handler
+            )
         }
-        joystickHandler.post(joystickRunnable!!)
+
+        override fun onCancelled(gestureDescription: GestureDescription) {
+            // Restart gesture if we're still holding
+            if (joystickActive) restartJoystick()
+        }
     }
 
-    /** Call when the joystick thumb is released. */
-    fun stopJoystick() {
-        joystickRunnable?.let { joystickHandler.removeCallbacks(it) }
-        joystickRunnable = null
-    }
-
-    private fun dispatchJoystickSwipe(
-        cx: Int, cy: Int, dx: Float, dy: Float, radius: Int
-    ) {
+    /** Call when the virtual joystick thumb first moves off centre. */
+    fun joystickDown(cx: Int, cy: Int) {
         val svc = service ?: return
-        val tx = cx + dx * radius
-        val ty = cy + dy * radius
+        joystickActive = true
+        lastTX   = cx.toFloat();  lastTY   = cy.toFloat()
+        currentTX = cx.toFloat(); currentTY = cy.toFloat()
         val path = Path().apply {
-            moveTo(cx.toFloat(), cy.toFloat())
-            lineTo(tx, ty)
+            moveTo(lastTX, lastTY)
+            lineTo(lastTX + 0.1f, lastTY) // tiny extent required
         }
+        currentStroke = GestureDescription.StrokeDescription(path, 0L, STROKE_MS, true)
+        svc.dispatchGesture(
+            GestureDescription.Builder().addStroke(currentStroke!!).build(),
+            joystickCallback, handler
+        )
+    }
+
+    /** Call every time the normalised joystick position changes. */
+    fun joystickUpdate(tx: Float, ty: Float) {
+        currentTX = tx
+        currentTY = ty
+    }
+
+    /** Call when the thumb is released. */
+    fun joystickUp() {
+        joystickActive = false
+        val svc    = service ?: return
+        val stroke = currentStroke ?: return
+        // Final stroke: return to centre (or stay) then lift
+        val path = Path().apply { moveTo(lastTX, lastTY); lineTo(lastTX + 0.1f, lastTY) }
+        val end  = stroke.continueStroke(path, 0L, 50L, false)
+        svc.dispatchGesture(GestureDescription.Builder().addStroke(end).build(), null, null)
+        currentStroke = null
+    }
+
+    private fun restartJoystick() {
+        joystickDown(lastTX.toInt(), lastTY.toInt())
+    }
+
+    // ── Swipe pad (camera drag) ────────────────────────────────────────────────
+    // Dispatches a quick one-shot swipe; good for camera control where each
+    // movement is a small swipe from the target centre.
+
+    fun swipePad(fromX: Float, fromY: Float, toX: Float, toY: Float) {
+        val svc = service ?: return
+        val path = Path().apply { moveTo(fromX, fromY); lineTo(toX, toY) }
         val stroke = GestureDescription.StrokeDescription(path, 0L, 80L)
         svc.dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
     }
+
+    private const val STROKE_MS = 120L   // How long each continued segment lasts
 }
