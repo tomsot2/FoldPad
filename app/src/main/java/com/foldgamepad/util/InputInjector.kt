@@ -14,60 +14,82 @@ object InputInjector {
 
     private val handler = Handler(Looper.getMainLooper())
 
+    // ── Pending taps ──────────────────────────────────────────────────────────
+    // When a joystick gesture is active, taps are queued here and bundled into
+    // the next joystick continuation as a simultaneous multi-touch stroke.
+    // This avoids calling dispatchGesture() twice (which cancels the first call).
+
+    private val pendingTaps = mutableListOf<Pair<Int, Int>>()
+
     // ── Tap ──────────────────────────────────────────────────────────────────
 
     fun tap(x: Int, y: Int) {
+        if (joystickActive) {
+            // Defer: will be bundled into the next joystick gesture dispatch
+            synchronized(pendingTaps) { pendingTaps.add(x to y) }
+        } else {
+            dispatchTapNow(x, y)
+        }
+    }
+
+    private fun dispatchTapNow(x: Int, y: Int) {
         val svc = service ?: return
         val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
         val stroke = GestureDescription.StrokeDescription(path, 0L, 60L)
         svc.dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
     }
 
-    // ── Continuous joystick (hold-and-drag) ───────────────────────────────────
-    // Uses continueStroke so the game sees one unbroken ACTION_DOWN → ACTION_MOVE
-    // sequence rather than repeated taps.
+    // ── Continuous joystick ───────────────────────────────────────────────────
+    // Maintains an unbroken ACTION_DOWN → ACTION_MOVE chain via continueStroke.
+    // Each ~80 ms the callback fires; we continue from the current target position
+    // and drain any pending button taps as simultaneous second-touch strokes.
 
-    private var joystickActive   = false
-    private var currentTX        = 0f
-    private var currentTY        = 0f
-    private var lastTX           = 0f
-    private var lastTY           = 0f
+    private var joystickActive = false
+    private var targetX = 0f;  private var targetY = 0f
+    private var lastX   = 0f;  private var lastY   = 0f
     private var currentStroke: GestureDescription.StrokeDescription? = null
 
     private val joystickCallback = object : AccessibilityService.GestureResultCallback() {
         override fun onCompleted(gestureDescription: GestureDescription) {
             if (!joystickActive) return
-            val svc = service ?: return
+            val svc    = service ?: return
             val stroke = currentStroke ?: return
-            // Continue from last position to wherever the thumb is now
+
+            // Move (or stay) at current joystick target
             val path = Path().apply {
-                moveTo(lastTX, lastTY)
-                lineTo(currentTX, currentTY)
+                moveTo(lastX, lastY)
+                lineTo(targetX, targetY)
             }
-            lastTX = currentTX
-            lastTY = currentTY
+            lastX = targetX;  lastY = targetY
             currentStroke = stroke.continueStroke(path, 0L, STROKE_MS, true)
-            svc.dispatchGesture(
-                GestureDescription.Builder().addStroke(currentStroke!!).build(),
-                this, handler
-            )
+
+            val builder = GestureDescription.Builder().addStroke(currentStroke!!)
+
+            // Bundle any queued button taps as simultaneous multi-touch strokes
+            val taps = synchronized(pendingTaps) { pendingTaps.toList().also { pendingTaps.clear() } }
+            taps.forEach { (tx, ty) ->
+                val tapPath = Path().apply { moveTo(tx.toFloat(), ty.toFloat()) }
+                // Small startTime offset keeps Android happy when mixing stroke types
+                builder.addStroke(GestureDescription.StrokeDescription(tapPath, 10L, 60L))
+            }
+
+            svc.dispatchGesture(builder.build(), this, handler)
         }
 
         override fun onCancelled(gestureDescription: GestureDescription) {
-            // Restart gesture if we're still holding
             if (joystickActive) restartJoystick()
         }
     }
 
-    /** Call when the virtual joystick thumb first moves off centre. */
     fun joystickDown(cx: Int, cy: Int) {
         val svc = service ?: return
         joystickActive = true
-        lastTX   = cx.toFloat();  lastTY   = cy.toFloat()
-        currentTX = cx.toFloat(); currentTY = cy.toFloat()
+        lastX = cx.toFloat();   lastY = cy.toFloat()
+        targetX = cx.toFloat(); targetY = cy.toFloat()
+
         val path = Path().apply {
-            moveTo(lastTX, lastTY)
-            lineTo(lastTX + 0.1f, lastTY) // tiny extent required
+            moveTo(lastX, lastY)
+            lineTo(lastX + 0.1f, lastY)   // tiny extent — required for valid stroke
         }
         currentStroke = GestureDescription.StrokeDescription(path, 0L, STROKE_MS, true)
         svc.dispatchGesture(
@@ -76,38 +98,36 @@ object InputInjector {
         )
     }
 
-    /** Call every time the normalised joystick position changes. */
     fun joystickUpdate(tx: Float, ty: Float) {
-        currentTX = tx
-        currentTY = ty
+        targetX = tx;  targetY = ty
     }
 
-    /** Call when the thumb is released. */
     fun joystickUp() {
         joystickActive = false
         val svc    = service ?: return
         val stroke = currentStroke ?: return
-        // Final stroke: return to centre (or stay) then lift
-        val path = Path().apply { moveTo(lastTX, lastTY); lineTo(lastTX + 0.1f, lastTY) }
-        val end  = stroke.continueStroke(path, 0L, 50L, false)
+        val path   = Path().apply { moveTo(lastX, lastY); lineTo(lastX + 0.1f, lastY) }
+        val end    = stroke.continueStroke(path, 0L, 50L, false)
         svc.dispatchGesture(GestureDescription.Builder().addStroke(end).build(), null, null)
         currentStroke = null
     }
 
     private fun restartJoystick() {
-        joystickDown(lastTX.toInt(), lastTY.toInt())
+        joystickDown(lastX.toInt(), lastY.toInt())
     }
 
-    // ── Swipe pad (camera drag) ────────────────────────────────────────────────
-    // Dispatches a quick one-shot swipe; good for camera control where each
-    // movement is a small swipe from the target centre.
+    // ── Swipe pad ─────────────────────────────────────────────────────────────
 
     fun swipePad(fromX: Float, fromY: Float, toX: Float, toY: Float) {
         val svc = service ?: return
         val path = Path().apply { moveTo(fromX, fromY); lineTo(toX, toY) }
-        val stroke = GestureDescription.StrokeDescription(path, 0L, 80L)
-        svc.dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+        svc.dispatchGesture(
+            GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0L, 80L))
+                .build(),
+            null, null
+        )
     }
 
-    private const val STROKE_MS = 120L   // How long each continued segment lasts
+    private const val STROKE_MS = 80L
 }
