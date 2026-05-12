@@ -17,6 +17,7 @@ import com.foldgamepad.model.JoystickMode
 import com.foldgamepad.model.LayoutConfig
 import com.foldgamepad.util.ConfigManager
 import com.foldgamepad.util.InputInjector
+import com.foldgamepad.util.SamsungInputBridge
 import com.foldgamepad.view.EditModeView
 import com.foldgamepad.view.VirtualButtonView
 import com.foldgamepad.view.VirtualJoystickView
@@ -35,16 +36,42 @@ class OverlayService : Service() {
     private var isEditMode  = false
     private var isCoverMode = false
 
+    // Game lifecycle receiver — listens to same Samsung broadcasts as Game Booster
+    private val gameReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                ACTION_GAME_RESUME -> {
+                    val pkg = intent.getStringExtra("packageName") ?: return
+                    if (config.gamePackage.isBlank() || config.gamePackage == pkg) {
+                        if (!isCoverMode && !isEditMode) {
+                            removePanelWindow(); createPanelWindow()
+                        }
+                    }
+                }
+                ACTION_GAME_PAUSE -> {
+                    if (!isEditMode && !isCoverMode) removePanelWindow()
+                }
+            }
+        }
+    }
+
     companion object {
         var instance: OverlayService? = null
         const val ACTION_EDIT  = "com.foldgamepad.ACTION_EDIT"
         const val ACTION_COVER = "com.foldgamepad.ACTION_COVER"
         const val ACTION_STOP  = "com.foldgamepad.ACTION_STOP"
+
+        // Samsung Game Booster broadcasts (from Game Booster APK analysis)
+        private const val ACTION_GAME_RESUME = "com.samsung.android.game.gametools.ACTION_GAME_ON_RESUME"
+        private const val ACTION_GAME_PAUSE  = "com.samsung.android.game.gametools.ACTION_GAME_ON_PAUSE"
+
+        // FLAG_SPLIT_TOUCH — Game Booster uses this (0x800000). Allows simultaneous
+        // multi-touch across windows so holding joystick doesn't swallow button taps.
+        private const val FLAG_SPLIT_TOUCH = 0x00800000
+
         private const val NOTIF_ID   = 1
         private const val CHANNEL_ID = "foldgamepad_overlay"
     }
-
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onCreate() {
         super.onCreate()
@@ -54,6 +81,8 @@ class OverlayService : Service() {
         calcDimensions()
         createPanelWindow()
         startForeground(NOTIF_ID, buildNotification())
+        registerGameReceiver()
+        applySamsungBridge()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -73,15 +102,41 @@ class OverlayService : Service() {
             isEditMode  -> { removeEditWindow(); removePanelWindow(); createPanelWindow(); createEditWindow() }
             else        -> { removePanelWindow(); createPanelWindow() }
         }
+        applySamsungBridge()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         instance = null
+        SamsungInputBridge.clearMapping()
+        try { unregisterReceiver(gameReceiver) } catch (e: Exception) {}
         removePanelWindow(); removeEditWindow(); removeCoverWindow()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    // ── Samsung bridge ────────────────────────────────────────────────────────
+
+    private fun applySamsungBridge() {
+        SamsungInputBridge.applyMapping(config.buttons, screenW, gameH, panelH)
+        updateNotification()
+    }
+
+    // ── Game receiver ─────────────────────────────────────────────────────────
+
+    private fun registerGameReceiver() {
+        val filter = IntentFilter().apply {
+            addAction(ACTION_GAME_RESUME)
+            addAction(ACTION_GAME_PAUSE)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(gameReceiver, filter, RECEIVER_EXPORTED)
+            } else {
+                registerReceiver(gameReceiver, filter)
+            }
+        } catch (e: Exception) {}
+    }
 
     // ── Dimensions ────────────────────────────────────────────────────────────
 
@@ -107,8 +162,11 @@ class OverlayService : Service() {
         buildPanelButtons(panel)
         wm.addView(panel, overlayParams(
             w = WindowManager.LayoutParams.MATCH_PARENT, h = panelH,
+            // FLAG_SPLIT_TOUCH allows multi-touch across windows — holding joystick
+            // while tapping buttons. Original FoldPad was missing this.
             flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    FLAG_SPLIT_TOUCH,
             gravity = Gravity.BOTTOM or Gravity.START
         ))
         panelView = panel
@@ -149,39 +207,30 @@ class OverlayService : Service() {
         val cy = btn.targetY.takeIf { it >= 0 } ?: (gameH / 2)
 
         v.onDown = { _, _ ->
-            if (InputInjector.isReady && btn.joystickMode == JoystickMode.STICK) {
+            if (InputInjector.isReady && btn.joystickMode == JoystickMode.STICK)
                 InputInjector.joystickDown(cx, cy)
-            }
         }
-
         v.onUpdate = update@{ normX, normY, dX, dY ->
             if (!InputInjector.isReady) return@update
             when (btn.joystickMode) {
-                JoystickMode.STICK -> {
-                    val tx = cx + normX * btn.joystickGameRadius
-                    val ty = cy + normY * btn.joystickGameRadius
-                    InputInjector.joystickUpdate(tx, ty)
-                }
-                JoystickMode.SWIPE_PAD -> {
-                    if (dX != 0f || dY != 0f) {
-                        val sens = btn.joystickGameRadius.toFloat()
-                        InputInjector.swipePad(
-                            cx.toFloat(), cy.toFloat(),
-                            cx + dX * sens, cy + dY * sens
-                        )
-                    }
+                JoystickMode.STICK -> InputInjector.joystickUpdate(
+                    cx + normX * btn.joystickGameRadius,
+                    cy + normY * btn.joystickGameRadius
+                )
+                JoystickMode.SWIPE_PAD -> if (dX != 0f || dY != 0f) {
+                    val s = btn.joystickGameRadius.toFloat()
+                    InputInjector.swipePad(cx.toFloat(), cy.toFloat(), cx + dX * s, cy + dY * s)
                 }
             }
         }
-
         v.onUp = {
-            if (InputInjector.isReady && btn.joystickMode == JoystickMode.STICK) {
+            if (InputInjector.isReady && btn.joystickMode == JoystickMode.STICK)
                 InputInjector.joystickUp()
-            }
         }
     }
 
     private fun fireTap(btn: ButtonConfig) {
+        if (SamsungInputBridge.isActive) return   // system handles it natively
         if (!InputInjector.isReady) {
             Toast.makeText(this, "Enable the accessibility service first", Toast.LENGTH_SHORT).show()
             return
@@ -198,34 +247,26 @@ class OverlayService : Service() {
     private fun toggleEditMode() { if (isEditMode) exitEditMode() else enterEditMode() }
 
     private fun enterEditMode() {
-        isEditMode = true
-        updateNotification()
-        createEditWindow()
+        isEditMode = true; updateNotification(); createEditWindow()
     }
 
     private fun exitEditMode() {
-        isEditMode = false
-        updateNotification()
-        removeEditWindow()
-        removePanelWindow()
-        createPanelWindow()
+        isEditMode = false; updateNotification()
+        removeEditWindow(); removePanelWindow(); createPanelWindow()
+        applySamsungBridge()
     }
 
     private fun createEditWindow() {
         val ev = EditModeView(
-            context = this,
-            config  = config,
-            screenW = screenW,
-            screenH = screenH,
-            gameH   = gameH,
-            panelH  = panelH,
+            context = this, config = config,
+            screenW = screenW, screenH = screenH, gameH = gameH, panelH = panelH,
             onSave  = { updated -> config = updated; ConfigManager.save(this, config) },
             onDone  = { exitEditMode() }
         )
         wm.addView(ev, overlayParams(
-            w       = WindowManager.LayoutParams.MATCH_PARENT,
-            h       = WindowManager.LayoutParams.MATCH_PARENT,
-            flags   = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            w = WindowManager.LayoutParams.MATCH_PARENT,
+            h = WindowManager.LayoutParams.MATCH_PARENT,
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             gravity = Gravity.TOP or Gravity.START
         ))
         editView = ev
@@ -240,13 +281,11 @@ class OverlayService : Service() {
 
     private fun toggleCoverMode() {
         if (isCoverMode) {
-            isCoverMode = false
-            removeCoverWindow()
+            isCoverMode = false; removeCoverWindow()
             if (!isEditMode) createPanelWindow()
         } else {
             isCoverMode = true
-            removePanelWindow(); removeEditWindow()
-            isEditMode = false
+            removePanelWindow(); removeEditWindow(); isEditMode = false
             createCoverWindow()
         }
         updateNotification()
@@ -255,26 +294,19 @@ class OverlayService : Service() {
     private fun createCoverWindow() {
         val cover = FrameLayout(this)
         cover.setBackgroundColor(Color.argb(235, 10, 10, 16))
-
         cover.addView(makeCoverButton("L2") { fireL2() }, FrameLayout.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT, screenH / 2
         ).apply { gravity = Gravity.TOP })
-
-        val div = android.view.View(this).also {
-            it.setBackgroundColor(Color.argb(160, 0, 210, 255))
-        }
+        val div = android.view.View(this).also { it.setBackgroundColor(Color.argb(160, 0, 210, 255)) }
         cover.addView(div, FrameLayout.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT, 3
         ).apply { topMargin = screenH / 2 - 1; gravity = Gravity.TOP })
-
         cover.addView(makeCoverButton("R2") { fireR2() }, FrameLayout.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT, screenH / 2
         ).apply { gravity = Gravity.BOTTOM })
-
         wm.addView(cover, overlayParams(
-            w       = WindowManager.LayoutParams.MATCH_PARENT,
-            h       = WindowManager.LayoutParams.MATCH_PARENT,
-            flags   = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            w = WindowManager.LayoutParams.MATCH_PARENT, h = WindowManager.LayoutParams.MATCH_PARENT,
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             gravity = Gravity.TOP or Gravity.START
         ))
         coverView = cover
@@ -282,24 +314,21 @@ class OverlayService : Service() {
 
     private fun makeCoverButton(label: String, onClick: () -> Unit) =
         android.widget.TextView(this).apply {
-            text      = label
-            textSize  = 52f
-            gravity   = Gravity.CENTER
-            typeface  = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
+            text = label; textSize = 52f; gravity = Gravity.CENTER
+            typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE)
             setBackgroundColor(Color.TRANSPARENT)
             setOnClickListener { onClick() }
         }
 
     private fun fireL2() {
-        if (!InputInjector.isReady) return
+        if (SamsungInputBridge.isActive || !InputInjector.isReady) return
         val x = config.l2TargetX.takeIf { it >= 0 } ?: return
         val y = config.l2TargetY.takeIf { it >= 0 } ?: return
         InputInjector.tap(x, y)
     }
 
     private fun fireR2() {
-        if (!InputInjector.isReady) return
+        if (SamsungInputBridge.isActive || !InputInjector.isReady) return
         val x = config.r2TargetX.takeIf { it >= 0 } ?: return
         val y = config.r2TargetY.takeIf { it >= 0 } ?: return
         InputInjector.tap(x, y)
@@ -337,9 +366,10 @@ class OverlayService : Service() {
                 NotificationChannel(CHANNEL_ID, "FoldGamepad", NotificationManager.IMPORTANCE_LOW)
             )
         }
+        val bridgeTag = if (SamsungInputBridge.isActive) " · Samsung native" else ""
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle("FoldGamepad  •  ${config.gameName.ifBlank { "No game" }}")
+            .setContentTitle("FoldGamepad  •  ${config.gameName.ifBlank { "No game" }}$bridgeTag")
             .setContentText(if (isEditMode) "Edit mode active" else "Overlay active")
             .setContentIntent(PendingIntent.getActivity(
                 this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
@@ -347,8 +377,7 @@ class OverlayService : Service() {
             .addAction(0, if (isEditMode) "Exit Edit" else "Edit Layout", pendingIntent(ACTION_EDIT))
             .addAction(0, if (isCoverMode) "Exit Cover" else "Cover Mode", pendingIntent(ACTION_COVER))
             .addAction(0, "Stop", pendingIntent(ACTION_STOP))
-            .setOngoing(true)
-            .build()
+            .setOngoing(true).build()
     }
 
     private fun updateNotification() {
@@ -362,13 +391,9 @@ class OverlayService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-    // ── Window param helper ───────────────────────────────────────────────────
-
     private fun overlayParams(w: Int, h: Int, flags: Int, gravity: Int) =
         WindowManager.LayoutParams(
-            w, h,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            flags,
-            PixelFormat.TRANSLUCENT
+            w, h, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            flags, PixelFormat.TRANSLUCENT
         ).apply { this.gravity = gravity }
 }
