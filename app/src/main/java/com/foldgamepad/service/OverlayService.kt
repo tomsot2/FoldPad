@@ -149,10 +149,8 @@ class OverlayService : Service() {
     private fun createPanelWindow() {
         val panel = GamepadPanelLayout(this)
         panel.setBackgroundColor(Color.argb(230, 10, 10, 16))
-
         buildPanelButtons(panel)
         addEditButton(panel)
-
         wm.addView(panel, overlayParams(
             w       = WindowManager.LayoutParams.MATCH_PARENT,
             h       = panelH,
@@ -200,7 +198,6 @@ class OverlayService : Service() {
                 return true
             }
         }
-
         panel.addView(btn, FrameLayout.LayoutParams(EDIT_BTN_W, EDIT_BTN_H).apply {
             gravity   = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             topMargin = 12
@@ -208,7 +205,6 @@ class OverlayService : Service() {
     }
 
     private fun buildPanelButtons(panel: FrameLayout) {
-        // Clear stale views before rebuild so old button positions never linger.
         panel.removeAllViews()
         config.buttons.filter { it.isVisible }.forEach { btn ->
             val sizePx = (btn.size * panelH).toInt().coerceAtLeast(60)
@@ -239,12 +235,13 @@ class OverlayService : Service() {
 
         v.onDown   = { _, _ ->
             if (InputInjector.isReady && btn.joystickMode == JoystickMode.STICK)
-                InputInjector.joystickDown(cx, cy)
+                InputInjector.joystickDown(btn.id, cx, cy)
         }
         v.onUpdate = update@{ normX, normY, dX, dY ->
             if (!InputInjector.isReady) return@update
             when (btn.joystickMode) {
                 JoystickMode.STICK -> InputInjector.joystickUpdate(
+                    btn.id,
                     cx + normX * btn.joystickGameRadius,
                     cy + normY * btn.joystickGameRadius
                 )
@@ -256,7 +253,7 @@ class OverlayService : Service() {
         }
         v.onUp     = {
             if (InputInjector.isReady && btn.joystickMode == JoystickMode.STICK)
-                InputInjector.joystickUp()
+                InputInjector.joystickUp(btn.id)
         }
     }
 
@@ -277,8 +274,6 @@ class OverlayService : Service() {
 
     private fun enterEditMode() {
         isEditMode = true; updateNotification()
-        // Hide panel while editing — EditModeView draws everything itself,
-        // and leaving the panel underneath causes ghost buttons at old positions.
         removePanelWindow()
         createEditWindow()
     }
@@ -370,7 +365,6 @@ class OverlayService : Service() {
     }
 
     fun launchGame(packageName: String, appName: String) {
-        // Load the layout saved for this game (falls back to default if new)
         config = ConfigManager.loadForPackage(this, packageName).copy(gameName = appName)
         ConfigManager.save(this, config)
         calcDimensions()
