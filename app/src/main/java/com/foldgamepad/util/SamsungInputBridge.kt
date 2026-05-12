@@ -23,7 +23,6 @@ object SamsungInputBridge {
     private const val CMD_SET        = "set_input_redirection"
     private const val CMD_CLEAR      = "set_input_redirection"
 
-    // Tri-state: null = not yet tested, true = works, false = unavailable
     @Volatile private var available: Boolean? = null
 
     val isAvailable: Boolean
@@ -33,17 +32,9 @@ object SamsungInputBridge {
             return available!!
         }
 
-    /** True if the bridge successfully registered the last mapping. */
     @Volatile var isActive: Boolean = false
         private set
 
-    // ── Public API ─────────────────────────────────────────────────────────
-
-    /**
-     * Register a native input-remap table from [buttons].
-     * Call whenever the overlay layout changes.
-     * Returns true if Samsung accepted the mapping.
-     */
     fun applyMapping(
         buttons: List<ButtonConfig>,
         screenW: Int,
@@ -59,30 +50,12 @@ object SamsungInputBridge {
         }
     }
 
-    /**
-     * Clear the remap table (e.g. when overlay is destroyed).
-     */
     fun clearMapping(): Boolean {
         if (!isAvailable) return false
         val json = """{"type":0,"items":[]}"""
         return invoke(CMD_CLEAR, json).also { isActive = false }
     }
 
-    // ── JSON builder ────────────────────────────────────────────────────────
-
-    /**
-     * Builds the GMSFilterData JSON that Game Booster's B7/e.a() sends.
-     * Only includes tap buttons that have a target coordinate set.
-     *
-     * Format (per item):
-     *   name        – button id
-     *   inDisplayId – display the button lives on (0 = same display as game)
-     *   srcMaintain – always 1 (observed in Game Booster)
-     *   inputType   – 4 = simple tap
-     *   x / y       – centre of button in panel (absolute screen pixels)
-     *   l / t / w / h – button bounding box in panel
-     *   mappingX/Y  – where to inject the touch in game area
-     */
     private fun buildJson(
         buttons: List<ButtonConfig>,
         screenW: Int,
@@ -102,8 +75,6 @@ object SamsungInputBridge {
             }
         return """{"type":1,"items":[$items]}"""
     }
-
-    // ── Reflection helpers ──────────────────────────────────────────────────
 
     private fun probe(): Boolean = try {
         val cls = Class.forName("com.samsung.android.game.SemGameManager")

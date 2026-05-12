@@ -24,36 +24,29 @@ object ConfigManager {
     fun load(context: Context): LayoutConfig {
         val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getString(KEY_LAYOUT, null) ?: return buildDefault()
-        return try {
-            json.decodeFromString(raw)
-        } catch (e: Exception) {
-            buildDefault()
-        }
+        return try { json.decodeFromString(raw) } catch (e: Exception) { buildDefault() }
     }
 
-    // Default layout: ABXY face cluster, L1/R1, two joysticks
+    /**
+     * Default layout mirrors Game Booster's default virtual keypad:
+     *  - One joystick on the left (like Game Booster's "Center L")
+     *  - Four numbered action buttons on the right (userKey_1 through userKey_4)
+     * Labels are numbers rather than controller letters — simpler and game-agnostic.
+     */
     private fun buildDefault(): LayoutConfig {
         val btns = mutableListOf(
-            // Left joystick
-            ButtonConfig("joy_l",  "L",  ButtonType.JOYSTICK, panelX = 0.13f, panelY = 0.52f, size = 0.26f),
-            // Right joystick
-            ButtonConfig("joy_r",  "R",  ButtonType.JOYSTICK, panelX = 0.65f, panelY = 0.52f, size = 0.26f),
-            // Face buttons (ABXY cluster, right side)
-            ButtonConfig("btn_a",  "A",  ButtonType.TAP,      panelX = 0.87f, panelY = 0.62f, size = 0.14f),
-            ButtonConfig("btn_b",  "B",  ButtonType.TAP,      panelX = 0.93f, panelY = 0.35f, size = 0.14f),
-            ButtonConfig("btn_x",  "X",  ButtonType.TAP,      panelX = 0.80f, panelY = 0.35f, size = 0.14f),
-            ButtonConfig("btn_y",  "Y",  ButtonType.TAP,      panelX = 0.87f, panelY = 0.10f, size = 0.14f),
-            // Shoulder buttons
-            ButtonConfig("btn_l1", "L1", ButtonType.TAP,      panelX = 0.06f, panelY = 0.10f, size = 0.13f),
-            ButtonConfig("btn_r1", "R1", ButtonType.TAP,      panelX = 0.94f, panelY = 0.10f, size = 0.13f),
-            // D-pad
-            ButtonConfig("btn_du", "↑",  ButtonType.TAP,      panelX = 0.34f, panelY = 0.18f, size = 0.11f),
-            ButtonConfig("btn_dd", "↓",  ButtonType.TAP,      panelX = 0.34f, panelY = 0.60f, size = 0.11f),
-            ButtonConfig("btn_dl", "←",  ButtonType.TAP,      panelX = 0.27f, panelY = 0.38f, size = 0.11f),
-            ButtonConfig("btn_dr", "→",  ButtonType.TAP,      panelX = 0.41f, panelY = 0.38f, size = 0.11f),
-            // Start / Select
-            ButtonConfig("btn_start",  "▶", ButtonType.TAP,   panelX = 0.55f, panelY = 0.25f, size = 0.10f),
-            ButtonConfig("btn_select", "⏸", ButtonType.TAP,   panelX = 0.46f, panelY = 0.25f, size = 0.10f),
+            // Joystick — left side, Game Booster "Center L" equivalent
+            ButtonConfig("joy_l", "JOY", ButtonType.JOYSTICK, panelX = 0.15f, panelY = 0.50f, size = 0.30f),
+
+            // Numbered action buttons — right cluster, Game Booster userKey_1..4
+            ButtonConfig("btn_1", "1",   ButtonType.TAP, panelX = 0.72f, panelY = 0.25f, size = 0.16f),
+            ButtonConfig("btn_2", "2",   ButtonType.TAP, panelX = 0.87f, panelY = 0.25f, size = 0.16f),
+            ButtonConfig("btn_3", "3",   ButtonType.TAP, panelX = 0.72f, panelY = 0.72f, size = 0.16f),
+            ButtonConfig("btn_4", "4",   ButtonType.TAP, panelX = 0.87f, panelY = 0.72f, size = 0.16f),
+
+            // Shoulder buttons — top row
+            ButtonConfig("btn_l", "L",   ButtonType.TAP, panelX = 0.06f, panelY = 0.12f, size = 0.12f),
+            ButtonConfig("btn_r", "R",   ButtonType.TAP, panelX = 0.94f, panelY = 0.12f, size = 0.12f),
         )
         return LayoutConfig(buttons = btns)
     }

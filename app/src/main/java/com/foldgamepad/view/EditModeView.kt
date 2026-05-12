@@ -38,10 +38,10 @@ class EditModeView(
 
     private val cfg = config.copy(buttons = config.buttons.map { it }.toMutableList())
 
-    // ── Preset labels (tap button label to cycle) ─────────────────────────────
+    // ── Preset labels (tap button label to cycle) — numbers first ─────────────
     private val presetLabels = listOf(
-        "A","B","X","Y","L1","L2","R1","R2",
-        "↑","↓","←","→","▶","⏸","✕","○","△","□","ZL","ZR"
+        "1","2","3","4","5","6","7","8",
+        "L","R","↑","↓","←","→","A","B","X","Y","L1","R1","▶","⏸"
     )
 
     // ── Drag state ────────────────────────────────────────────────────────────
@@ -50,7 +50,6 @@ class EditModeView(
     private var dragIdx   = -1
     private var dragX     = 0f
     private var dragY     = 0f
-    // Starting size for resize
     private var resizeStartSize = 0f
     private var resizeStartDist = 0f
 
@@ -84,23 +83,18 @@ class EditModeView(
     // ── Draw ──────────────────────────────────────────────────────────────────
 
     override fun onDraw(canvas: Canvas) {
-        // Background dim
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), dimP)
-        // Divider
         canvas.drawLine(0f, gameH.toFloat(), width.toFloat(), gameH.toFloat(), divP)
 
-        // Zone labels
         labelP.textSize = 26f
         canvas.drawText("GAME AREA — drag button here to set tap target", width / 2f, (gameH / 2f), labelP)
         canvas.drawText("BUTTON PANEL — drag to move  |  ⇲ to resize  |  × to delete", width / 2f, (gameH + panelH / 2f), labelP)
 
-        // Target crosshairs
         cfg.buttons.forEachIndexed { i, btn ->
             if (i != dragIdx && btn.targetX >= 0 && btn.targetY >= 0)
                 drawTarget(canvas, btn.targetX.toFloat(), btn.targetY.toFloat(), btn.label)
         }
 
-        // Buttons (skip dragging one)
         cfg.buttons.forEachIndexed { i, btn ->
             if (i != dragIdx) {
                 val (bx, by) = panelCoords(btn)
@@ -108,7 +102,6 @@ class EditModeView(
             }
         }
 
-        // Dragging button on top
         if (dragIdx >= 0 && dragType == DragType.MOVE) {
             val btn = cfg.buttons[dragIdx]
             val (ox, oy) = panelCoords(btn)
@@ -117,11 +110,8 @@ class EditModeView(
             if (dragY < gameH) drawTarget(canvas, dragX, dragY, btn.label, live = true)
         }
 
-        // Add buttons
         drawAddButton(canvas, "＋ TAP",  width * 0.18f, gameH + panelH - 38f)
         drawAddButton(canvas, "＋ JOY",  width * 0.50f, gameH + panelH - 38f)
-
-        // Done button
         drawDoneBtn(canvas)
     }
 
@@ -145,17 +135,14 @@ class EditModeView(
             val badgeR = (r * 0.28f).coerceAtLeast(14f)
             val bOff   = r * 0.72f
 
-            // × delete badge (top-right)
             canvas.drawCircle(cx + bOff, cy - bOff, badgeR, deletePaint)
             badgeTextP.textSize = badgeR * 1.0f
             canvas.drawText("×", cx + bOff, cy - bOff + badgeTextP.textSize * 0.36f, badgeTextP)
 
-            // ⇲ resize handle (bottom-right)
             canvas.drawCircle(cx + bOff, cy + bOff, badgeR, resizePaint)
             badgeTextP.textSize = badgeR * 0.8f
             canvas.drawText("⇲", cx + bOff, cy + bOff + badgeTextP.textSize * 0.36f, badgeTextP)
 
-            // Mode badge (top-left, joystick only)
             if (btn.type == ButtonType.JOYSTICK) {
                 canvas.drawCircle(cx - bOff, cy - bOff, badgeR, modeBadgePaint)
                 badgeTextP.textSize = badgeR * 0.65f
@@ -207,51 +194,42 @@ class EditModeView(
     }
 
     private fun onDown(x: Float, y: Float): Boolean {
-        // Done button
         val dcx = width / 2f
         if (y in 14f..86f && x in (dcx - 170f)..(dcx + 170f)) {
             onSave(cfg); onDone(); return true
         }
 
-        // "+ TAP" button
         val addTapCx = width * 0.18f; val addCy = gameH + panelH - 38f
         if (abs(x - addTapCx) < 130f && abs(y - addCy) < 28f) {
             addButton(ButtonType.TAP); return true
         }
 
-        // "+ JOY" button
         val addJoyCx = width * 0.50f
         if (abs(x - addJoyCx) < 130f && abs(y - addCy) < 28f) {
             addButton(ButtonType.JOYSTICK); return true
         }
 
-        // Badge / button body hits
         cfg.buttons.forEachIndexed { i, btn ->
             val (bx, by) = panelCoords(btn)
             val r     = btnRadius(btn)
             val bOff  = r * 0.72f
             val badgeR = (r * 0.28f).coerceAtLeast(14f)
 
-            // × delete badge
             if (dist(x, y, bx + bOff, by - bOff) < badgeR * 1.4f) {
                 cfg.buttons.removeAt(i); onSave(cfg); invalidate(); return true
             }
-            // ⇲ resize handle
             if (dist(x, y, bx + bOff, by + bOff) < badgeR * 1.4f) {
                 dragIdx = i; dragType = DragType.RESIZE
                 resizeStartSize = btn.size
                 resizeStartDist = dist(x, y, bx, by)
                 dragX = x; dragY = y; invalidate(); return true
             }
-            // Mode badge (joystick only)
             if (btn.type == ButtonType.JOYSTICK &&
                 dist(x, y, bx - bOff, by - bOff) < badgeR * 1.4f) {
                 val newMode = if (btn.joystickMode == JoystickMode.STICK) JoystickMode.SWIPE_PAD else JoystickMode.STICK
                 cfg.buttons[i] = btn.copy(joystickMode = newMode)
                 onSave(cfg); invalidate(); return true
             }
-            // Button label tap (cycle label) — only if tap, not drag; decided in onUp
-            // Button body drag
             if (dist(x, y, bx, by) < r * 1.4f) {
                 dragIdx = i; dragType = DragType.MOVE
                 dragX = x; dragY = y; invalidate(); return true
@@ -282,15 +260,12 @@ class EditModeView(
             val travelled = dist(x, y, origX, origY)
 
             cfg.buttons[dragIdx] = when {
-                // Dropped in game area → set as target
                 y < gameH -> btn.copy(targetX = x.toInt(), targetY = y.toInt())
-                // Tiny movement → cycle label
                 travelled < 20f -> {
                     val cur = presetLabels.indexOf(btn.label)
                     val next = presetLabels[(cur + 1).rem(presetLabels.size)]
                     btn.copy(label = next)
                 }
-                // Moved within panel → reposition
                 else -> btn.copy(
                     panelX = (x / width).coerceIn(0.02f, 0.98f),
                     panelY = ((y - gameH) / panelH).coerceIn(0.02f, 0.98f)
