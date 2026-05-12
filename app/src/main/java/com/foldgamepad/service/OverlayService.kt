@@ -19,6 +19,7 @@ import com.foldgamepad.util.ConfigManager
 import com.foldgamepad.util.InputInjector
 import com.foldgamepad.util.SamsungInputBridge
 import com.foldgamepad.view.EditModeView
+import com.foldgamepad.view.GamepadPanelLayout
 import com.foldgamepad.view.VirtualButtonView
 import com.foldgamepad.view.VirtualJoystickView
 
@@ -36,7 +37,6 @@ class OverlayService : Service() {
     private var isEditMode  = false
     private var isCoverMode = false
 
-    // Game lifecycle receiver — same Samsung broadcasts Game Booster uses
     private val gameReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
@@ -62,18 +62,14 @@ class OverlayService : Service() {
         private const val ACTION_GAME_RESUME = "com.samsung.android.game.gametools.ACTION_GAME_ON_RESUME"
         private const val ACTION_GAME_PAUSE  = "com.samsung.android.game.gametools.ACTION_GAME_ON_PAUSE"
 
-        // From Game Booster APK analysis — allows multi-touch across windows
         private const val FLAG_SPLIT_TOUCH = 0x00800000
 
         private const val NOTIF_ID   = 1
         private const val CHANNEL_ID = "foldgamepad_overlay"
 
-        // Edit button dimensions
         private const val EDIT_BTN_W = 96
         private const val EDIT_BTN_H = 44
     }
-
-    // ── Lifecycle ──────────────────────────────────────────────────────────────
 
     override fun onCreate() {
         super.onCreate()
@@ -101,7 +97,7 @@ class OverlayService : Service() {
         calcDimensions()
         when {
             isCoverMode -> { removeCoverWindow(); createCoverWindow() }
-            isEditMode  -> { removeEditWindow(); removePanelWindow(); createPanelWindow(); createEditWindow() }
+            isEditMode  -> { removeEditWindow(); createEditWindow() }
             else        -> { removePanelWindow(); createPanelWindow() }
         }
         applySamsungBridge()
@@ -117,14 +113,10 @@ class OverlayService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    // ── Samsung bridge ─────────────────────────────────────────────────────────
-
     private fun applySamsungBridge() {
         SamsungInputBridge.applyMapping(config.buttons, screenW, gameH, panelH)
         updateNotification()
     }
-
-    // ── Game receiver ──────────────────────────────────────────────────────────
 
     private fun registerGameReceiver() {
         val filter = IntentFilter().apply {
@@ -140,8 +132,6 @@ class OverlayService : Service() {
         } catch (e: Exception) {}
     }
 
-    // ── Dimensions ─────────────────────────────────────────────────────────────
-
     private fun calcDimensions() {
         val bounds = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             wm.currentWindowMetrics.bounds
@@ -156,10 +146,8 @@ class OverlayService : Service() {
         panelH  = (screenH - gameH).coerceAtLeast(1)
     }
 
-    // ── Panel window ───────────────────────────────────────────────────────────
-
     private fun createPanelWindow() {
-        val panel = FrameLayout(this)
+        val panel = GamepadPanelLayout(this)
         panel.setBackgroundColor(Color.argb(230, 10, 10, 16))
 
         buildPanelButtons(panel)
@@ -181,29 +169,20 @@ class OverlayService : Service() {
         panelView = null
     }
 
-    /**
-     * Edit button — centred at the top of the panel so it's always reachable
-     * without pulling down the notification shade.
-     */
     private fun addEditButton(panel: FrameLayout) {
         val btn = object : View(this) {
             private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.FILL
-                color = Color.argb(160, 20, 20, 30)
+                style = Paint.Style.FILL; color = Color.argb(160, 20, 20, 30)
             }
             private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style       = Paint.Style.STROKE
-                strokeWidth = 1.5f
-                color       = Color.argb(140, 0, 180, 220)
+                style = Paint.Style.STROKE; strokeWidth = 1.5f
+                color = Color.argb(140, 0, 180, 220)
             }
             private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color     = Color.argb(200, 200, 220, 255)
-                textAlign = Paint.Align.CENTER
-                typeface  = Typeface.DEFAULT_BOLD
-                textSize  = 22f
+                color = Color.argb(200, 200, 220, 255)
+                textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD; textSize = 22f
             }
             private var pressed = false
-
             override fun onDraw(canvas: Canvas) {
                 val r = height / 2f
                 val rect = RectF(2f, 2f, width - 2f, height - 2f)
@@ -212,7 +191,6 @@ class OverlayService : Service() {
                 canvas.drawRoundRect(rect, r, r, strokePaint)
                 canvas.drawText("✎  edit", width / 2f, height / 2f + textPaint.textSize * 0.36f, textPaint)
             }
-
             override fun onTouchEvent(event: MotionEvent): Boolean {
                 when (event.action) {
                     MotionEvent.ACTION_DOWN   -> { pressed = true;  invalidate() }
@@ -230,6 +208,8 @@ class OverlayService : Service() {
     }
 
     private fun buildPanelButtons(panel: FrameLayout) {
+        // Clear stale views before rebuild so old button positions never linger.
+        panel.removeAllViews()
         config.buttons.filter { it.isVisible }.forEach { btn ->
             val sizePx = (btn.size * panelH).toInt().coerceAtLeast(60)
             val cx = (btn.panelX * screenW).toInt()
@@ -293,12 +273,14 @@ class OverlayService : Service() {
         InputInjector.tap(btn.targetX, btn.targetY)
     }
 
-    // ── Edit mode ──────────────────────────────────────────────────────────────
-
     private fun toggleEditMode() { if (isEditMode) exitEditMode() else enterEditMode() }
 
     private fun enterEditMode() {
-        isEditMode = true; updateNotification(); createEditWindow()
+        isEditMode = true; updateNotification()
+        // Hide panel while editing — EditModeView draws everything itself,
+        // and leaving the panel underneath causes ghost buttons at old positions.
+        removePanelWindow()
+        createEditWindow()
     }
 
     private fun exitEditMode() {
@@ -327,8 +309,6 @@ class OverlayService : Service() {
         editView?.let { runCatching { wm.removeView(it) } }
         editView = null
     }
-
-    // ── Cover mode ─────────────────────────────────────────────────────────────
 
     private fun toggleCoverMode() {
         if (isCoverMode) {
@@ -389,12 +369,14 @@ class OverlayService : Service() {
         coverView = null
     }
 
-    // ── App launch ─────────────────────────────────────────────────────────────
-
     fun launchGame(packageName: String, appName: String) {
-        config = config.copy(gamePackage = packageName, gameName = appName)
+        // Load the layout saved for this game (falls back to default if new)
+        config = ConfigManager.loadForPackage(this, packageName).copy(gameName = appName)
         ConfigManager.save(this, config)
         calcDimensions()
+        removePanelWindow(); createPanelWindow()
+        applySamsungBridge()
+
         val intent = packageManager.getLaunchIntentForPackage(packageName) ?: run {
             Toast.makeText(this, "Cannot launch $appName", Toast.LENGTH_SHORT).show()
             return
@@ -406,8 +388,6 @@ class OverlayService : Service() {
         Toast.makeText(this, "Launched $appName at 16:9", Toast.LENGTH_SHORT).show()
         updateNotification()
     }
-
-    // ── Notification ───────────────────────────────────────────────────────────
 
     private fun buildNotification(): Notification {
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager

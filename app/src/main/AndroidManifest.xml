@@ -6,7 +6,6 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    <!-- Required on Android 13+ to show the persistent foreground service notification -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
@@ -20,7 +19,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:screenOrientation="landscape"
+            android:screenOrientation="fullSensor"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -31,7 +30,7 @@
         <activity
             android:name=".AppPickerActivity"
             android:exported="false"
-            android:screenOrientation="landscape"
+            android:screenOrientation="fullSensor"
             android:configChanges="orientation|screenSize|screenLayout" />
 
         <service
