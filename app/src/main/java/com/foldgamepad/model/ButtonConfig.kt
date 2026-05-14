@@ -13,12 +13,9 @@ data class ButtonConfig(
     val panelX: Float = 0.5f,
     val panelY: Float = 0.5f,
     val size: Float = 0.18f,
-    // Target on game screen (-1 = not set)
     val targetX: Int = -1,
     val targetY: Int = -1,
-    // Joystick radius on game screen (pixels)
     val joystickGameRadius: Int = 200,
-    // Joystick input mode
     val joystickMode: JoystickMode = JoystickMode.STICK,
     val isVisible: Boolean = true
 )

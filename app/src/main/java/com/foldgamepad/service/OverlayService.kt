@@ -10,7 +10,6 @@ import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.foldgamepad.MainActivity
-import com.foldgamepad.R
 import com.foldgamepad.model.ButtonConfig
 import com.foldgamepad.model.ButtonType
 import com.foldgamepad.model.JoystickMode
@@ -42,13 +41,10 @@ class OverlayService : Service() {
             when (intent.action) {
                 ACTION_GAME_RESUME -> {
                     val pkg = intent.getStringExtra("packageName") ?: return
-                    if (config.gamePackage.isBlank() || config.gamePackage == pkg) {
+                    if (config.gamePackage.isBlank() || config.gamePackage == pkg)
                         if (!isCoverMode && !isEditMode) { removePanelWindow(); createPanelWindow() }
-                    }
                 }
-                ACTION_GAME_PAUSE -> {
-                    if (!isEditMode && !isCoverMode) removePanelWindow()
-                }
+                ACTION_GAME_PAUSE -> if (!isEditMode && !isCoverMode) removePanelWindow()
             }
         }
     }
@@ -58,17 +54,13 @@ class OverlayService : Service() {
         const val ACTION_EDIT  = "com.foldgamepad.ACTION_EDIT"
         const val ACTION_COVER = "com.foldgamepad.ACTION_COVER"
         const val ACTION_STOP  = "com.foldgamepad.ACTION_STOP"
-
         private const val ACTION_GAME_RESUME = "com.samsung.android.game.gametools.ACTION_GAME_ON_RESUME"
         private const val ACTION_GAME_PAUSE  = "com.samsung.android.game.gametools.ACTION_GAME_ON_PAUSE"
-
-        private const val FLAG_SPLIT_TOUCH = 0x00800000
-
-        private const val NOTIF_ID   = 1
-        private const val CHANNEL_ID = "foldgamepad_overlay"
-
-        private const val EDIT_BTN_W = 96
-        private const val EDIT_BTN_H = 44
+        private const val FLAG_SPLIT_TOUCH   = 0x00800000
+        private const val NOTIF_ID           = 1
+        private const val CHANNEL_ID         = "foldgamepad_overlay"
+        private const val EDIT_BTN_W         = 96
+        private const val EDIT_BTN_H         = 44
     }
 
     override fun onCreate() {
@@ -80,6 +72,7 @@ class OverlayService : Service() {
         createPanelWindow()
         startForeground(NOTIF_ID, buildNotification())
         registerGameReceiver()
+        SamsungInputBridge.init()   // try to connect to SemGameManager
         applySamsungBridge()
     }
 
@@ -106,7 +99,7 @@ class OverlayService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         instance = null
-        SamsungInputBridge.clearMapping()
+        SamsungInputBridge.clear()
         try { unregisterReceiver(gameReceiver) } catch (e: Exception) {}
         removePanelWindow(); removeEditWindow(); removeCoverWindow()
     }
@@ -114,21 +107,22 @@ class OverlayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun applySamsungBridge() {
-        SamsungInputBridge.applyMapping(config.buttons, screenW, gameH, panelH)
+        if (SamsungInputBridge.isAvailable) {
+            val ok = SamsungInputBridge.apply(config.buttons, screenW, gameH, panelH)
+            android.util.Log.i("OverlayService",
+                "SamsungBridge.apply → $ok (active=${SamsungInputBridge.isActive})")
+        }
         updateNotification()
     }
 
     private fun registerGameReceiver() {
         val filter = IntentFilter().apply {
-            addAction(ACTION_GAME_RESUME)
-            addAction(ACTION_GAME_PAUSE)
+            addAction(ACTION_GAME_RESUME); addAction(ACTION_GAME_PAUSE)
         }
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
                 registerReceiver(gameReceiver, filter, RECEIVER_EXPORTED)
-            } else {
-                registerReceiver(gameReceiver, filter)
-            }
+            else registerReceiver(gameReceiver, filter)
         } catch (e: Exception) {}
     }
 
@@ -155,8 +149,7 @@ class OverlayService : Service() {
             w       = WindowManager.LayoutParams.MATCH_PARENT,
             h       = panelH,
             flags   = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                      WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                      FLAG_SPLIT_TOUCH,
+                      WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or FLAG_SPLIT_TOUCH,
             gravity = Gravity.BOTTOM or Gravity.START
         ))
         panelView = panel
@@ -169,28 +162,22 @@ class OverlayService : Service() {
 
     private fun addEditButton(panel: FrameLayout) {
         val btn = object : View(this) {
-            private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.FILL; color = Color.argb(160, 20, 20, 30)
-            }
-            private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.STROKE; strokeWidth = 1.5f
-                color = Color.argb(140, 0, 180, 220)
-            }
-            private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.argb(200, 200, 220, 255)
-                textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD; textSize = 22f
-            }
+            private val bgP  = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+            private val strP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE; strokeWidth = 1.5f; color = Color.argb(140,0,180,220) }
+            private val txtP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.argb(200,200,220,255); textAlign = Paint.Align.CENTER
+                typeface = Typeface.DEFAULT_BOLD; textSize = 22f }
             private var pressed = false
             override fun onDraw(canvas: Canvas) {
-                val r = height / 2f
-                val rect = RectF(2f, 2f, width - 2f, height - 2f)
-                bgPaint.color = if (pressed) Color.argb(220, 0, 80, 120) else Color.argb(160, 20, 20, 30)
-                canvas.drawRoundRect(rect, r, r, bgPaint)
-                canvas.drawRoundRect(rect, r, r, strokePaint)
-                canvas.drawText("✎  edit", width / 2f, height / 2f + textPaint.textSize * 0.36f, textPaint)
+                val r = height / 2f; val rect = RectF(2f, 2f, width-2f, height-2f)
+                bgP.color = if (pressed) Color.argb(220,0,80,120) else Color.argb(160,20,20,30)
+                canvas.drawRoundRect(rect, r, r, bgP)
+                canvas.drawRoundRect(rect, r, r, strP)
+                canvas.drawText("✎  edit", width/2f, height/2f + txtP.textSize*0.36f, txtP)
             }
-            override fun onTouchEvent(event: MotionEvent): Boolean {
-                when (event.action) {
+            override fun onTouchEvent(e: MotionEvent): Boolean {
+                when (e.action) {
                     MotionEvent.ACTION_DOWN   -> { pressed = true;  invalidate() }
                     MotionEvent.ACTION_UP     -> { pressed = false; invalidate(); toggleEditMode() }
                     MotionEvent.ACTION_CANCEL -> { pressed = false; invalidate() }
@@ -199,8 +186,7 @@ class OverlayService : Service() {
             }
         }
         panel.addView(btn, FrameLayout.LayoutParams(EDIT_BTN_W, EDIT_BTN_H).apply {
-            gravity   = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            topMargin = 12
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; topMargin = 12
         })
     }
 
@@ -211,8 +197,8 @@ class OverlayService : Service() {
             val cx = (btn.panelX * screenW).toInt()
             val cy = (btn.panelY * panelH).toInt()
             val lp = FrameLayout.LayoutParams(sizePx, sizePx).apply {
-                leftMargin = (cx - sizePx / 2).coerceAtLeast(0)
-                topMargin  = (cy - sizePx / 2).coerceAtLeast(0)
+                leftMargin = (cx - sizePx/2).coerceAtLeast(0)
+                topMargin  = (cy - sizePx/2).coerceAtLeast(0)
             }
             when (btn.type) {
                 ButtonType.TAP -> {
@@ -232,40 +218,36 @@ class OverlayService : Service() {
     private fun wireJoystick(v: VirtualJoystickView, btn: ButtonConfig) {
         val cx = btn.targetX.takeIf { it >= 0 } ?: (screenW / 2)
         val cy = btn.targetY.takeIf { it >= 0 } ?: (gameH / 2)
-
         v.onDown   = { _, _ ->
-            if (InputInjector.isReady && btn.joystickMode == JoystickMode.STICK)
+            if (!SamsungInputBridge.isActive && InputInjector.isReady && btn.joystickMode == JoystickMode.STICK)
                 InputInjector.joystickDown(btn.id, cx, cy)
         }
         v.onUpdate = update@{ normX, normY, dX, dY ->
-            if (!InputInjector.isReady) return@update
+            if (SamsungInputBridge.isActive || !InputInjector.isReady) return@update
             when (btn.joystickMode) {
-                JoystickMode.STICK -> InputInjector.joystickUpdate(
-                    btn.id,
-                    cx + normX * btn.joystickGameRadius,
-                    cy + normY * btn.joystickGameRadius
-                )
+                JoystickMode.STICK ->
+                    InputInjector.joystickUpdate(btn.id,
+                        cx + normX * btn.joystickGameRadius,
+                        cy + normY * btn.joystickGameRadius)
                 JoystickMode.SWIPE_PAD -> if (dX != 0f || dY != 0f) {
                     val s = btn.joystickGameRadius.toFloat()
-                    InputInjector.swipePad(cx.toFloat(), cy.toFloat(), cx + dX * s, cy + dY * s)
+                    InputInjector.swipePad(cx.toFloat(), cy.toFloat(), cx + dX*s, cy + dY*s)
                 }
             }
         }
-        v.onUp     = {
-            if (InputInjector.isReady && btn.joystickMode == JoystickMode.STICK)
+        v.onUp = {
+            if (!SamsungInputBridge.isActive && InputInjector.isReady && btn.joystickMode == JoystickMode.STICK)
                 InputInjector.joystickUp(btn.id)
         }
     }
 
     private fun fireTap(btn: ButtonConfig) {
-        if (SamsungInputBridge.isActive) return
+        if (SamsungInputBridge.isActive) return   // GOS handles it natively
         if (!InputInjector.isReady) {
-            Toast.makeText(this, "Enable the accessibility service first", Toast.LENGTH_SHORT).show()
-            return
+            Toast.makeText(this, "Enable the accessibility service first", Toast.LENGTH_SHORT).show(); return
         }
         if (btn.targetX < 0 || btn.targetY < 0) {
-            Toast.makeText(this, "${btn.label}: set a target in Edit Mode", Toast.LENGTH_SHORT).show()
-            return
+            Toast.makeText(this, "${btn.label}: set a target in Edit Mode", Toast.LENGTH_SHORT).show(); return
         }
         InputInjector.tap(btn.targetX, btn.targetY)
     }
@@ -274,8 +256,7 @@ class OverlayService : Service() {
 
     private fun enterEditMode() {
         isEditMode = true; updateNotification()
-        removePanelWindow()
-        createEditWindow()
+        removePanelWindow(); createEditWindow()
     }
 
     private fun exitEditMode() {
@@ -301,8 +282,7 @@ class OverlayService : Service() {
     }
 
     private fun removeEditWindow() {
-        editView?.let { runCatching { wm.removeView(it) } }
-        editView = null
+        editView?.let { runCatching { wm.removeView(it) } }; editView = null
     }
 
     private fun toggleCoverMode() {
@@ -320,22 +300,20 @@ class OverlayService : Service() {
     private fun createCoverWindow() {
         val cover = FrameLayout(this)
         cover.setBackgroundColor(Color.argb(235, 10, 10, 16))
-        cover.addView(makeCoverButton("L2") { fireL2() }, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT, screenH / 2
-        ).apply { gravity = Gravity.TOP })
-        val div = View(this).also { it.setBackgroundColor(Color.argb(160, 0, 210, 255)) }
-        cover.addView(div, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT, 3
-        ).apply { topMargin = screenH / 2 - 1; gravity = Gravity.TOP })
-        cover.addView(makeCoverButton("R2") { fireR2() }, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT, screenH / 2
-        ).apply { gravity = Gravity.BOTTOM })
+        cover.addView(makeCoverButton("L2") { fireL2() },
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, screenH/2)
+                .apply { gravity = Gravity.TOP })
+        val div = View(this).also { it.setBackgroundColor(Color.argb(160,0,210,255)) }
+        cover.addView(div, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, 3)
+            .apply { topMargin = screenH/2 - 1; gravity = Gravity.TOP })
+        cover.addView(makeCoverButton("R2") { fireR2() },
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, screenH/2)
+                .apply { gravity = Gravity.BOTTOM })
         wm.addView(cover, overlayParams(
-            w       = FrameLayout.LayoutParams.MATCH_PARENT,
-            h       = FrameLayout.LayoutParams.MATCH_PARENT,
-            flags   = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            gravity = Gravity.TOP or Gravity.START
-        ))
+            w = FrameLayout.LayoutParams.MATCH_PARENT,
+            h = FrameLayout.LayoutParams.MATCH_PARENT,
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            gravity = Gravity.TOP or Gravity.START))
         coverView = cover
     }
 
@@ -349,19 +327,18 @@ class OverlayService : Service() {
 
     private fun fireL2() {
         if (SamsungInputBridge.isActive || !InputInjector.isReady) return
-        InputInjector.tap(config.l2TargetX.takeIf { it >= 0 } ?: return,
-                          config.l2TargetY.takeIf { it >= 0 } ?: return)
+        InputInjector.tap(config.l2TargetX.takeIf { it>=0 } ?: return,
+                          config.l2TargetY.takeIf { it>=0 } ?: return)
     }
 
     private fun fireR2() {
         if (SamsungInputBridge.isActive || !InputInjector.isReady) return
-        InputInjector.tap(config.r2TargetX.takeIf { it >= 0 } ?: return,
-                          config.r2TargetY.takeIf { it >= 0 } ?: return)
+        InputInjector.tap(config.r2TargetX.takeIf { it>=0 } ?: return,
+                          config.r2TargetY.takeIf { it>=0 } ?: return)
     }
 
     private fun removeCoverWindow() {
-        coverView?.let { runCatching { wm.removeView(it) } }
-        coverView = null
+        coverView?.let { runCatching { wm.removeView(it) } }; coverView = null
     }
 
     fun launchGame(packageName: String, appName: String) {
@@ -370,10 +347,8 @@ class OverlayService : Service() {
         calcDimensions()
         removePanelWindow(); createPanelWindow()
         applySamsungBridge()
-
         val intent = packageManager.getLaunchIntentForPackage(packageName) ?: run {
-            Toast.makeText(this, "Cannot launch $appName", Toast.LENGTH_SHORT).show()
-            return
+            Toast.makeText(this, "Cannot launch $appName", Toast.LENGTH_SHORT).show(); return
         }
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
         val options = ActivityOptions.makeBasic()
@@ -385,39 +360,31 @@ class OverlayService : Service() {
 
     private fun buildNotification(): Notification {
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        if (nm.getNotificationChannel(CHANNEL_ID) == null) {
-            nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "FoldGamepad", NotificationManager.IMPORTANCE_LOW)
-            )
-        }
-        val bridgeTag = if (SamsungInputBridge.isActive) " · Samsung native" else ""
+        if (nm.getNotificationChannel(CHANNEL_ID) == null)
+            nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "FoldGamepad",
+                NotificationManager.IMPORTANCE_LOW))
+        val tag = if (SamsungInputBridge.isActive) " · Samsung native" else ""
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle("FoldGamepad  •  ${config.gameName.ifBlank { "No game" }}$bridgeTag")
+            .setContentTitle("FoldGamepad  •  ${config.gameName.ifBlank { "No game" }}$tag")
             .setContentText(if (isEditMode) "Edit mode active" else "Overlay active")
             .setContentIntent(PendingIntent.getActivity(
-                this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
-            ))
+                this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
             .addAction(0, if (isEditMode) "Exit Edit" else "Edit Layout", pendingIntent(ACTION_EDIT))
             .addAction(0, if (isCoverMode) "Exit Cover" else "Cover Mode", pendingIntent(ACTION_COVER))
             .addAction(0, "Stop", pendingIntent(ACTION_STOP))
             .setOngoing(true).build()
     }
 
-    private fun updateNotification() {
+    private fun updateNotification() =
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIF_ID, buildNotification())
-    }
 
     private fun pendingIntent(action: String): PendingIntent =
-        PendingIntent.getService(
-            this, action.hashCode(),
+        PendingIntent.getService(this, action.hashCode(),
             Intent(this, OverlayService::class.java).apply { this.action = action },
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
     private fun overlayParams(w: Int, h: Int, flags: Int, gravity: Int) =
-        WindowManager.LayoutParams(
-            w, h, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            flags, PixelFormat.TRANSLUCENT
-        ).apply { this.gravity = gravity }
+        WindowManager.LayoutParams(w, h, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            flags, PixelFormat.TRANSLUCENT).apply { this.gravity = gravity }
 }

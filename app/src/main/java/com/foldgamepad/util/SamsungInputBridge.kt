@@ -3,98 +3,100 @@ package com.foldgamepad.util
 import android.util.Log
 import com.foldgamepad.model.ButtonConfig
 import com.foldgamepad.model.ButtonType
+import java.lang.reflect.Method
 
 /**
- * Attempts to use Samsung's SemGameManager.requestWithJson("set_input_redirection") API
- * to register a native touch-remap table with the system.
+ * Tries Samsung's native Game Optimizing Service input redirection via reflection.
  *
- * When active, the system intercepts taps on the panel area and remaps them to game
- * coordinates directly — no AccessibilityService round-trip, lower latency, harder for
- * games to block.
+ * When active, GOS intercepts touches on the panel and redirects them to the game
+ * at the mapped coordinates — fully bypassing AccessibilityService and its
+ * gesture-cancellation limitations.
  *
- * Discovered by analysing Game Booster APK (B7/e class, GMSFilterData, set_input_redirection).
+ * JSON format reverse-engineered from Game Booster v8 B7/e.smali:
+ *   { "status":1, "param":[{"typeParam":5,"pointParam":"[gameX, gameY, L, T, R, B]"}] }
  *
- * Falls back silently to AccessibilityService path if unavailable or permission-denied.
+ * typeParam = (inputType | 4) | (inDisplayId << 3)
+ *   inputType 1=tap, 2=joystick/drag   inDisplayId always 0 on single display
  */
 object SamsungInputBridge {
 
-    private const val TAG = "SamsungInputBridge"
-    private const val METHOD_REQUEST = "requestWithJson"
-    private const val CMD_SET        = "set_input_redirection"
-    private const val CMD_CLEAR      = "set_input_redirection"
+    private const val TAG          = "SamsungBridge"
+    private const val ACTION_SET   = "set_input_redirection"
+    private const val ACTION_CLEAR = "set_input_redirection"
 
-    @Volatile private var available: Boolean? = null
+    private var instance: Any?    = null
+    private var rwMethod: Method? = null
 
-    val isAvailable: Boolean
-        get() {
-            available?.let { return it }
-            available = probe()
-            return available!!
-        }
+    var isActive   = false; private set
+    val isAvailable get() = rwMethod != null
 
-    @Volatile var isActive: Boolean = false
-        private set
-
-    fun applyMapping(
-        buttons: List<ButtonConfig>,
-        screenW: Int,
-        gameH: Int,
-        panelH: Int
-    ): Boolean {
-        if (!isAvailable) return false
-        val json = buildJson(buttons, screenW, gameH, panelH)
-        return invoke(CMD_SET, json).also { ok ->
-            isActive = ok
-            if (ok) Log.d(TAG, "Input redirection applied (${buttons.count { it.targetX >= 0 }} buttons)")
-            else    Log.d(TAG, "Input redirection rejected — using AccessibilityService fallback")
+    fun init() {
+        try {
+            val cls  = Class.forName("com.samsung.android.game.SemGameManager")
+            instance = cls.getDeclaredConstructor().newInstance()
+            rwMethod = cls.getMethod("requestWithJson", String::class.java, String::class.java)
+            Log.i(TAG, "SemGameManager available ✓")
+        } catch (e: Exception) {
+            Log.w(TAG, "SemGameManager not available: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
-    fun clearMapping(): Boolean {
-        if (!isAvailable) return false
-        val json = """{"type":0,"items":[]}"""
-        return invoke(CMD_CLEAR, json).also { isActive = false }
+    fun apply(buttons: List<ButtonConfig>, screenW: Int, gameH: Int, panelH: Int): Boolean {
+        val method = rwMethod ?: return false
+        val mgr    = instance  ?: return false
+        val json   = buildJson(1, buttons, screenW, gameH, panelH)
+        Log.d(TAG, "Sending: $json")
+        return try {
+            val result = method.invoke(mgr, ACTION_SET, json) as? String
+            Log.i(TAG, "requestWithJson result: $result")
+            isActive = true
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "requestWithJson failed: ${e.message}")
+            isActive = false
+            false
+        }
     }
 
-    private fun buildJson(
-        buttons: List<ButtonConfig>,
-        screenW: Int,
-        gameH: Int,
-        panelH: Int
-    ): String {
-        val items = buttons
-            .filter { it.isVisible && it.type == ButtonType.TAP && it.targetX >= 0 && it.targetY >= 0 }
-            .joinToString(",") { btn ->
-                val cx     = (btn.panelX * screenW).toInt()
-                val cy     = gameH + (btn.panelY * panelH).toInt()
-                val sizePx = (btn.size * panelH).toInt().coerceAtLeast(60)
-                val r      = sizePx / 2
-                """{"name":"${btn.id}","inDisplayId":0,"srcMaintain":1,"inputType":4,""" +
-                """"x":$cx,"y":$cy,"l":${cx - r},"t":${cy - r},"w":$sizePx,"h":$sizePx,""" +
-                """"mappingX":${btn.targetX},"mappingY":${btn.targetY}}"""
+    fun clear() {
+        val method = rwMethod ?: run { isActive = false; return }
+        val mgr    = instance  ?: run { isActive = false; return }
+        try { method.invoke(mgr, ACTION_CLEAR, buildJson(0, emptyList(), 0, 0, 0)) }
+        catch (e: Exception) { /* swallow */ }
+        isActive = false
+    }
+
+    private fun buildJson(status: Int, buttons: List<ButtonConfig>,
+                          screenW: Int, gameH: Int, panelH: Int): String {
+        val params = StringBuilder()
+        var first = true
+        for (btn in buttons.filter { it.isVisible }) {
+            val (l, t, w, h) = panelBounds(btn, screenW, gameH, panelH)
+            val r = l + w; val b = t + h
+            val inputType = if (btn.type == ButtonType.TAP) 1 else 2
+            val typeParam = inputType or 4   // inDisplayId=0
+
+            val pointParam = if (btn.type == ButtonType.TAP) {
+                if (btn.targetX < 0 || btn.targetY < 0) continue
+                "[${btn.targetX}, ${btn.targetY}, $l, $t, $r, $b]"
+            } else {
+                val cx = (l + r) / 2; val cy = (t + b) / 2
+                val gx = btn.targetX.takeIf { it >= 0 } ?: (screenW / 2)
+                val gy = btn.targetY.takeIf { it >= 0 } ?: (gameH / 2)
+                "[${gx - cx}, ${gy - cy}, $l, $t, $r, $b]"
             }
-        return """{"type":1,"items":[$items]}"""
+
+            if (!first) params.append(',')
+            params.append("""{"typeParam":$typeParam,"pointParam":"$pointParam"}""")
+            first = false
+        }
+        return """{"status":$status,"param":[$params]}"""
     }
 
-    private fun probe(): Boolean = try {
-        val cls = Class.forName("com.samsung.android.game.SemGameManager")
-        cls.getMethod(METHOD_REQUEST, String::class.java, String::class.java)
-        Log.d(TAG, "SemGameManager.requestWithJson found — Samsung native bridge available")
-        true
-    } catch (e: Exception) {
-        Log.d(TAG, "SemGameManager not available: ${e.message}")
-        false
-    }
-
-    private fun invoke(command: String, json: String): Boolean = try {
-        val cls    = Class.forName("com.samsung.android.game.SemGameManager")
-        val mgr    = cls.newInstance()
-        val method = cls.getMethod(METHOD_REQUEST, String::class.java, String::class.java)
-        method.invoke(mgr, command, json)
-        true
-    } catch (e: Exception) {
-        Log.w(TAG, "requestWithJson failed: ${e.message}")
-        available = false
-        false
+    private fun panelBounds(btn: ButtonConfig, screenW: Int, gameH: Int, panelH: Int): IntArray {
+        val sz = (btn.size * panelH).toInt().coerceAtLeast(40)
+        val cx = (btn.panelX * screenW).toInt()
+        val cy = (gameH + btn.panelY * panelH).toInt()
+        return intArrayOf((cx - sz / 2).coerceAtLeast(0), (cy - sz / 2).coerceAtLeast(0), sz, sz)
     }
 }
