@@ -65,19 +65,35 @@ class CoverOverlayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     /**
-     * Finds the non-default display (the cover screen on a folded device) and
-     * shows the button overlay there.
+     * Finds the non-default display (the cover screen) and shows the button
+     * overlay there. This is attempted regardless of fold state — the cover
+     * display should be enumerable and drawable via Presentation whether the
+     * phone is open or closed, the same way Camera shows a live preview on
+     * the cover screen while unfolded.
      */
     private fun showOnCoverDisplay() {
         val displays = displayManager.displays
+
+        // Diagnostic: log every display Android reports, so we can see exactly
+        // what's available rather than guessing.
+        val info = displays.joinToString("\n") { d ->
+            "id=${d.displayId} name=\"${d.name}\" state=${stateName(d.state)} flags=${d.flags}"
+        }
+        android.util.Log.i("CoverOverlay", "Displays found:\n$info")
+
         val coverDisplay = displays.firstOrNull { it.displayId != Display.DEFAULT_DISPLAY }
 
         if (coverDisplay == null) {
             android.widget.Toast.makeText(this,
-                "No second display found — fold the phone so the cover screen is active",
+                "Only 1 display detected (${displays.size} total). " +
+                "The cover screen isn't being reported to this app — see logcat 'CoverOverlay' for details.",
                 android.widget.Toast.LENGTH_LONG).show()
             return
         }
+
+        android.widget.Toast.makeText(this,
+            "Found cover display: id=${coverDisplay.displayId}, state=${stateName(coverDisplay.state)}",
+            android.widget.Toast.LENGTH_LONG).show()
 
         presentation = CoverPresentation(this, coverDisplay, layout,
             onButtonPressed = { btn ->
@@ -93,8 +109,24 @@ class CoverOverlayService : Service() {
                 CoverConfigManager.save(this, layout)
             }
         )
-        presentation?.show()
+        try {
+            presentation?.show()
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(this,
+                "Presentation.show() failed: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+            android.util.Log.e("CoverOverlay", "show() failed", e)
+        }
         updateNotification()
+    }
+
+    private fun stateName(state: Int): String = when (state) {
+        Display.STATE_ON -> "ON"
+        Display.STATE_OFF -> "OFF"
+        Display.STATE_DOZE -> "DOZE"
+        Display.STATE_DOZE_SUSPEND -> "DOZE_SUSPEND"
+        Display.STATE_ON_SUSPEND -> "ON_SUSPEND"
+        Display.STATE_UNKNOWN -> "UNKNOWN"
+        else -> "OTHER($state)"
     }
 
     private fun buildNotification(): Notification {

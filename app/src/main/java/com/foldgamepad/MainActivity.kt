@@ -33,9 +33,10 @@ class MainActivity : AppCompatActivity() {
 
         val desc = TextView(this).apply {
             text = "1. Enable Accessibility below\n" +
-                   "2. Calibrate targets while a game is open (unfolded)\n" +
-                   "3. Fold the phone and start the cover triggers\n" +
-                   "4. Press the edges to fire taps on the game"
+                   "2. Calibrate targets while a game is open\n" +
+                   "3. Start cover triggers — they show on the back screen\n" +
+                   "   while the phone stays open\n" +
+                   "4. Press the edges on the back to fire taps on the game"
             textSize = 15f
             setPadding(0, 0, 0, 48)
         }
@@ -55,7 +56,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(spacer())
 
         root.addView(Button(this).apply {
-            text = "2. Calibrate Trigger Targets (do this unfolded, in-game)"
+            text = "2. Calibrate Trigger Targets (in-game)"
             setOnClickListener {
                 if (!hasOverlayPermission()) { requestOverlayPermission(); return@setOnClickListener }
                 startForegroundService(Intent(this@MainActivity, CalibrationOverlayService::class.java))
@@ -73,7 +74,7 @@ class MainActivity : AppCompatActivity() {
                 if (!hasOverlayPermission()) { requestOverlayPermission(); return@setOnClickListener }
                 startForegroundService(Intent(this@MainActivity, CoverOverlayService::class.java))
                 Toast.makeText(this@MainActivity,
-                    "Cover triggers active — fold the phone",
+                    "Starting — check the toast/notification for display diagnostics",
                     Toast.LENGTH_LONG).show()
             }
         })
