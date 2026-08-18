@@ -51,9 +51,14 @@ class CalibrationOverlayService : Service() {
 
     private fun showOverlay() {
         val layout = CoverConfigManager.load(this)
-        val view = CalibrationView(this, layout.buttons) { updatedButtons ->
-            CoverConfigManager.save(this, layout.copy(buttons = updatedButtons.toMutableList()))
-        }
+        val view = CalibrationView(
+            context = this,
+            initialButtons = layout.buttons,
+            onSaved = { updatedButtons ->
+                CoverConfigManager.save(this, layout.copy(buttons = updatedButtons.toMutableList()))
+            },
+            onDone = { stopSelf() }
+        )
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -88,7 +93,8 @@ class CalibrationOverlayService : Service() {
 private class CalibrationView(
     context: Context,
     initialButtons: List<CoverButton>,
-    private val onSaved: (List<CoverButton>) -> Unit
+    private val onSaved: (List<CoverButton>) -> Unit,
+    private val onDone: () -> Unit
 ) : View(context) {
 
     private val buttons = initialButtons.toMutableList()
@@ -100,6 +106,12 @@ private class CalibrationView(
     }
     private val chipIdleP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL; color = Color.argb(200, 0, 140, 200)
+    }
+    private val doneP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL; color = Color.argb(230, 0, 170, 80)
+    }
+    private val doneStrokeP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeWidth = 3f; color = Color.WHITE
     }
     private val textP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE; textAlign = Paint.Align.CENTER
@@ -119,6 +131,12 @@ private class CalibrationView(
         return RectF(left, 60f, left + w, 60f + h)
     }
 
+    /** A clearly visible "✓ Done" button, top-right, always reachable. */
+    private fun doneRect(): RectF {
+        val w = 160f; val h = 70f
+        return RectF(width - w - 30f, 60f, width - 30f, 60f + h)
+    }
+
     override fun onDraw(canvas: Canvas) {
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), dimP)
 
@@ -131,15 +149,26 @@ private class CalibrationView(
             }
         }
 
+        // Done button — always visible, exits calibration immediately.
+        val dr = doneRect()
+        canvas.drawRoundRect(dr, 16f, 16f, doneP)
+        canvas.drawRoundRect(dr, 16f, 16f, doneStrokeP)
+        canvas.drawText("✓ Done", dr.centerX(), dr.centerY() + 10f, textP)
+
         val hint = if (armedIdx >= 0)
             "Tap where '${buttons[armedIdx].label}' should press"
-        else "Tap a chip above, then tap the target point"
+        else "Tap a chip, then tap the target point — or tap Done to finish"
         canvas.drawText(hint, width / 2f, height - 60f, hintP)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.action != MotionEvent.ACTION_DOWN) return true
         val x = event.x; val y = event.y
+
+        if (doneRect().contains(x, y)) {
+            onDone()
+            return true
+        }
 
         buttons.forEachIndexed { i, _ ->
             if (chipRect(i).contains(x, y)) {
