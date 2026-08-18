@@ -118,6 +118,11 @@ class CoverOverlayService : Service() {
     )
 }
 
+/** Drag interaction states for the cover-screen edit mode. Top-level so it can
+ *  be referenced from the inner View class (Kotlin disallows enums nested
+ *  directly inside inner classes). */
+private enum class DragMode { NONE, MOVE, RESIZE }
+
 /**
  * The UI shown on the cover display. Draws resizable/movable button zones.
  * In edit mode: drag body to move, drag the ⇲ badge to resize.
@@ -134,7 +139,9 @@ private class CoverPresentation(
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window?.setType(WindowManager.LayoutParams.TYPE_PRESENTATION)
+        // Presentation manages its own window type internally — no manual
+        // setType() call needed (and TYPE_PRESENTATION isn't a public constant
+        // on WindowManager.LayoutParams anyway).
         canvasView = ButtonCanvasView(context)
         setContentView(canvasView)
     }
@@ -148,8 +155,6 @@ private class CoverPresentation(
         private var dragMode = DragMode.NONE
         private var dragStartX = 0f; private var dragStartY = 0f
         private var origX = 0f; private var origY = 0f; private var origW = 0f; private var origH = 0f
-
-        private enum class DragMode { NONE, MOVE, RESIZE }
 
         private val fillP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL; color = Color.argb(140, 0, 150, 200)

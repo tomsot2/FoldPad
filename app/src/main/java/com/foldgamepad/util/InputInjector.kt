@@ -13,8 +13,8 @@ import com.foldgamepad.service.FoldAccessibilityService
  * since the button press happens on the cover display but must land on the
  * inner display where the game is actually running.
  *
- * Cross-display gesture dispatch (GestureDescription.Builder(displayId)) requires
- * API 33+. The Fold 7 ships well above that, so no fallback path is needed.
+ * Cross-display gesture dispatch (the displayId-aware dispatchGesture overload)
+ * requires API 34+. The Fold 7 ships well above that.
  */
 object InputInjector {
 
@@ -31,15 +31,19 @@ object InputInjector {
     fun tapOnDisplay(displayId: Int, x: Int, y: Int) {
         val svc = service ?: return
         try {
-            val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                GestureDescription.Builder(displayId)
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(
+                    pointPath(x.toFloat(), y.toFloat()), 0L, 60L
+                ))
+                .build()
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                svc.dispatchGesture(displayId, gesture, null, handler)
             } else {
-                GestureDescription.Builder()
+                // Pre-API 34: no cross-display dispatch available. Falls back to
+                // whichever display is currently receiving accessibility focus.
+                svc.dispatchGesture(gesture, null, handler)
             }
-            builder.addStroke(GestureDescription.StrokeDescription(
-                pointPath(x.toFloat(), y.toFloat()), 0L, 60L
-            ))
-            svc.dispatchGesture(builder.build(), null, handler)
         } catch (e: Exception) {
             android.util.Log.w("InputInjector", "tapOnDisplay failed: ${e.message}")
         }
