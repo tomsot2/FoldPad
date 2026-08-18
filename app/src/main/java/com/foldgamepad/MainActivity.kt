@@ -104,9 +104,10 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
             text = "1. Enable Accessibility below\n" +
                    "2. Calibrate targets while a game is open\n" +
                    "3. Start cover triggers\n" +
-                   "4. Tap 'Pick a game' below — this app shrinks to a\n" +
-                   "   small bubble so the cover triggers stay alive\n" +
-                   "5. Press the edges on the back to fire taps on the game"
+                   "4. Tap 'Pick a game' below to launch it\n" +
+                   "5. Press the edges on the back to fire taps on the game\n" +
+                   "(Diagnostic build — check logcat for CoverPad-Lifecycle\n" +
+                   " tags to see when the session dies after step 4)"
             textSize = 15f
             setPadding(0, 0, 0, 32)
         })
@@ -218,6 +219,10 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
             Toast.makeText(this, "No rear display area available right now", Toast.LENGTH_LONG).show()
             return
         }
+        // Re-read from disk — calibration happens in a separate service/process
+        // after this Activity's in-memory copy was first loaded, so the copy
+        // here can be stale unless we refresh it right before starting.
+        layout = CoverConfigManager.load(this)
         triggersRequested = true
         windowAreaController.presentContentOnWindowArea(
             token = token, activity = this, executor = mainExecutor,
@@ -284,31 +289,35 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
         Log.d("CoverPad", "Cover screen container visible = $isVisible")
     }
 
-    // ── Picture-in-Picture ─────────────────────────────────────────────────────
+    // ── Lifecycle diagnostics ────────────────────────────────────────────────────────────────
+    // PiP is off the table. Before building anything around the "stopped but
+    // not destroyed" theory, we need to actually confirm which lifecycle
+    // transition kills the session — onPause (losing foreground focus) or
+    // onStop (fully backgrounded/not visible at all). The docs only say the
+    // session "can be automatically dismissed when the user leaves the
+    // primary application window," which is ambiguous between the two.
+    //
+    // Test: tap "Pick a game" and watch which of these logs appears right
+    // before "Session ended unexpectedly" in onSessionEnded above.
+
+    override fun onPause() {
+        super.onPause()
+        Log.i("CoverPad-Lifecycle", "onPause — session alive? ${windowAreaSession != null}")
+    }
+
+    override fun onStop() {
+        super.onStop()
+        Log.i("CoverPad-Lifecycle", "onStop — session alive? ${windowAreaSession != null}")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        Log.i("CoverPad-Lifecycle", "onResume — session alive? ${windowAreaSession != null}")
+    }
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (triggersRequested && windowAreaSession != null) enterPipMode()
-    }
-
-    private fun enterPipMode() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) return
-        try {
-            val params = PictureInPictureParams.Builder()
-                .setAspectRatio(Rational(1, 1))
-                .build()
-            enterPictureInPictureMode(params)
-        } catch (e: Exception) {
-            Log.w("CoverPad", "enterPictureInPictureMode failed: ${e.message}")
-        }
-    }
-
-    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
-        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-        // Swap to the minimal view while in PiP so the tiny floating window
-        // isn't crammed with the full button list and instructions.
-        setContentView(if (isInPictureInPictureMode) pipUiView else fullUiView)
+        Log.i("CoverPad-Lifecycle", "onUserLeaveHint — session alive? ${windowAreaSession != null}")
     }
 
     // ── Simple app picker ──────────────────────────────────────────────────────
