@@ -1,29 +1,24 @@
 package com.foldgamepad.util
 
-import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import com.foldgamepad.service.FoldAccessibilityService
-import java.lang.reflect.Method
 
 /**
- * Dispatches taps to a SPECIFIC display — needed for cover-screen triggers,
- * since the button press happens on the cover display but must land on the
- * inner display where the game is running.
+ * Dispatches a tap via the accessibility service's standard dispatchGesture().
  *
- * IMPORTANT: There is no PUBLIC compile-time API on AccessibilityService for
- * cross-display gesture dispatch in the standard SDK — the 4-arg
- * dispatchGesture(displayId, GestureDescription, callback, Handler) is not
- * exposed as a stable public method we can call directly. We look it up via
- * reflection at runtime instead: if the OS build actually has it (some OEM/AOSP
- * versions expose it for multi-display accessibility), we use it; if not, we
- * fall back to standard single-display dispatch, which will target whichever
- * display currently holds accessibility focus (not necessarily the inner one).
+ * IMPORTANT: dispatchGesture() with no displayId always targets the DEFAULT
+ * display (id 0), regardless of which display the service's own overlay UI is
+ * currently rendered on. This means a button shown on the cover screen
+ * (a separate Presentation on a non-default display) can still inject a touch
+ * onto the inner screen's game — no special multi-display API needed.
  *
- * isCrossDisplaySupported tells the rest of the app which situation we're in.
+ * This is also why a same-display overlay (button UI and game both on display 0)
+ * doesn't work: the real finger touch and the injected gesture collide on the
+ * same input channel and Android cancels both. Putting the button UI on a
+ * different display (the cover screen) sidesteps that collision entirely.
  */
 object InputInjector {
 
@@ -32,58 +27,30 @@ object InputInjector {
 
     private val handler = Handler(Looper.getMainLooper())
 
-    private var crossDisplayMethod: Method? = null
-    private var lookedUp = false
-    val isCrossDisplaySupported: Boolean get() { ensureLookup(); return crossDisplayMethod != null }
-
-    private fun ensureLookup() {
-        if (lookedUp) return
-        lookedUp = true
-        try {
-            crossDisplayMethod = AccessibilityService::class.java.getMethod(
-                "dispatchGesture",
-                Int::class.javaPrimitiveType,
-                GestureDescription::class.java,
-                AccessibilityService.GestureResultCallback::class.java,
-                Handler::class.java
-            )
-            android.util.Log.i("InputInjector", "Cross-display dispatchGesture found ✓")
-        } catch (e: NoSuchMethodException) {
-            android.util.Log.w("InputInjector", "Cross-display dispatchGesture NOT available on this OS build")
-            crossDisplayMethod = null
-        }
-    }
-
     private fun pointPath(x: Float, y: Float): Path = Path().apply {
         moveTo(x, y); lineTo(x + 0.5f, y + 0.5f)
     }
 
-    /** Tap at (x, y) on the display identified by [displayId], if supported. */
-    fun tapOnDisplay(displayId: Int, x: Int, y: Int) {
+    /**
+     * Tap at (x, y) — always lands on the default display (the inner screen),
+     * regardless of which display this call originates from.
+     */
+    fun tap(x: Int, y: Int) {
         val svc = service ?: return
-        ensureLookup()
-
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(
-                pointPath(x.toFloat(), y.toFloat()), 0L, 60L
-            ))
-            .build()
-
-        val method = crossDisplayMethod
-        if (method != null) {
-            try {
-                method.invoke(svc, displayId, gesture, null, handler)
-                return
-            } catch (e: Exception) {
-                android.util.Log.w("InputInjector", "Reflective cross-display dispatch failed: ${e.message}")
-            }
-        }
-
-        // Fallback: standard dispatch, targets whatever display is currently focused.
         try {
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(
+                    pointPath(x.toFloat(), y.toFloat()), 0L, 60L
+                ))
+                .build()
             svc.dispatchGesture(gesture, null, handler)
         } catch (e: Exception) {
-            android.util.Log.w("InputInjector", "dispatchGesture failed: ${e.message}")
+            android.util.Log.w("InputInjector", "tap failed: ${e.message}")
         }
     }
+
+    // Kept for source compatibility with existing call sites — displayId is
+    // now ignored since plain dispatchGesture() already targets the default
+    // display regardless of caller's display.
+    fun tapOnDisplay(displayId: Int, x: Int, y: Int) = tap(x, y)
 }

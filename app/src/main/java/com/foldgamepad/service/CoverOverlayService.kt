@@ -18,8 +18,10 @@ import kotlin.math.sqrt
 
 /**
  * Finds the cover (outer) display and shows a resizable trigger-button overlay
- * on it via Presentation. Presses are dispatched as taps on the INNER display
- * (Display.DEFAULT_DISPLAY) at each button's configured target coordinates.
+ * on it via Presentation. Presses are dispatched as taps at each button's
+ * configured target coordinates — dispatchGesture() always lands on the
+ * DEFAULT display (the inner screen) regardless of which display the
+ * accessibility service's own overlay window is shown on.
  */
 class CoverOverlayService : Service() {
 
@@ -80,7 +82,10 @@ class CoverOverlayService : Service() {
         presentation = CoverPresentation(this, coverDisplay, layout,
             onButtonPressed = { btn ->
                 if (btn.targetX >= 0 && btn.targetY >= 0 && InputInjector.isReady) {
-                    InputInjector.tapOnDisplay(Display.DEFAULT_DISPLAY, btn.targetX, btn.targetY)
+                    // Plain dispatchGesture() always targets the default display
+                    // (the inner screen), regardless of the fact that this press
+                    // originated on the cover display's Presentation.
+                    InputInjector.tap(btn.targetX, btn.targetY)
                 }
             },
             onLayoutChanged = { updated ->
@@ -98,18 +103,10 @@ class CoverOverlayService : Service() {
             nm.createNotificationChannel(NotificationChannel(
                 CHANNEL_ID, "CoverPad", NotificationManager.IMPORTANCE_LOW))
         }
-        // Surface whether cross-display dispatch is actually available on this
-        // OS build — if not, taps fall back to whatever display has focus,
-        // which likely won't reach the game while folded.
-        val bridgeStatus = if (InputInjector.isCrossDisplaySupported)
-            "Cross-display dispatch: supported ✓" else "Cross-display dispatch: NOT supported ✗"
-
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentTitle("CoverPad triggers active")
-            .setContentText("${if (isEditMode) "Edit mode" else "Ready"} · $bridgeStatus")
-            .setStyle(NotificationCompat.BigTextStyle().bigText(
-                "${if (isEditMode) "Edit mode — drag to resize/move" else "Tap notification to edit"}\n$bridgeStatus"))
+            .setContentText(if (isEditMode) "Edit mode — drag to resize/move" else "Ready — tap notification to edit")
             .setContentIntent(PendingIntent.getActivity(
                 this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
             .addAction(0, if (isEditMode) "Done Editing" else "Edit Buttons", pendingIntent(ACTION_TOGGLE_EDIT))
