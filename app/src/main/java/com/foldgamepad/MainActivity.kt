@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.PictureInPictureParams
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.*
 import android.net.Uri
 import android.os.Build
@@ -11,10 +12,12 @@ import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
 import android.util.Rational
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.accessibility.AccessibilityManager
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -56,11 +59,29 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
     private var editModeOn = false
     private var canvasView: CoverButtonCanvasView? = null
     private var layout = CoverLayout()
-    private var triggersRequested = false   // true once user has pressed "Start"
+    private var triggersRequested = false
+
+    private lateinit var fullUiView: View
+    private lateinit var pipUiView: View
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         layout = CoverConfigManager.load(this)
+
+        // ── Minimal view shown ONLY while in PiP — avoids the whole button
+        // list being crammed into a tiny floating window.
+        pipUiView = FrameLayout(this).apply {
+            setBackgroundColor(Color.rgb(20, 20, 30))
+            addView(TextView(this@MainActivity).apply {
+                text = "🎮 CoverPad\nActive"
+                textSize = 16f
+                gravity = Gravity.CENTER
+                setTextColor(Color.WHITE)
+                setPadding(16, 16, 16, 16)
+            }, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
+            ).apply { gravity = Gravity.CENTER })
+        }
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -83,9 +104,8 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
             text = "1. Enable Accessibility below\n" +
                    "2. Calibrate targets while a game is open\n" +
                    "3. Start cover triggers\n" +
-                   "4. Tap 'Launch Game' below (or Home + reopen your game) —\n" +
-                   "   this app shrinks to a small floating bubble so the\n" +
-                   "   cover screen triggers stay alive\n" +
+                   "4. Tap 'Pick a game' below — this app shrinks to a\n" +
+                   "   small bubble so the cover triggers stay alive\n" +
                    "5. Press the edges on the back to fire taps on the game"
             textSize = 15f
             setPadding(0, 0, 0, 32)
@@ -141,6 +161,17 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
             setOnClickListener { showAppPicker() }
         })
 
+        root.addView(spacer())
+
+        root.addView(Button(this).apply {
+            text = "🔧 Test tap (center of THIS screen)"
+            setOnClickListener {
+                val dm = resources.displayMetrics
+                runTestTap(dm.widthPixels / 2, dm.heightPixels / 2)
+            }
+        })
+
+        fullUiView = root
         setContentView(root)
         checkDualScreenSupport()
     }
@@ -201,11 +232,7 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
         val canvas = CoverButtonCanvasView(
             context = session.context,
             layout = layout,
-            onButtonPressed = { btn ->
-                if (btn.targetX >= 0 && btn.targetY >= 0 && InputInjector.isReady) {
-                    InputInjector.tap(btn.targetX, btn.targetY)
-                }
-            },
+            onButtonPressed = { btn -> handleCoverButtonPress(btn) },
             onLayoutChanged = { updated -> layout = updated; CoverConfigManager.save(this, layout) }
         )
         canvas.setEditMode(editModeOn)
@@ -213,6 +240,32 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
         session.setContentView(canvas)
 
         Toast.makeText(this, "Cover triggers active", Toast.LENGTH_SHORT).show()
+    }
+
+    /** Presses a cover button — surfaces exactly what happened, since a silent
+     *  no-op is impossible to diagnose from the cover screen alone. */
+    private fun handleCoverButtonPress(btn: CoverButton) {
+        if (btn.targetX < 0 || btn.targetY < 0) {
+            Log.w("CoverPad", "'${btn.label}' pressed but has no calibrated target")
+            runOnUiThread {
+                Toast.makeText(this, "'${btn.label}' isn't calibrated yet", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+        val result = InputInjector.tap(btn.targetX, btn.targetY)
+        Log.i("CoverPad", "'${btn.label}' → tap(${btn.targetX},${btn.targetY}) = $result")
+        runOnUiThread {
+            Toast.makeText(this, "${btn.label}: $result", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Standalone sanity check independent of the cover screen / dual-screen
+     *  session — dispatches directly from this screen so we know whether the
+     *  accessibility gesture pipeline itself works at all. */
+    private fun runTestTap(x: Int, y: Int) {
+        val result = InputInjector.tap(x, y)
+        Toast.makeText(this, "Test tap($x,$y): $result", Toast.LENGTH_LONG).show()
+        Log.i("CoverPad", "Test tap($x,$y) = $result")
     }
 
     override fun onSessionEnded(t: Throwable?) {
@@ -223,9 +276,6 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
             Log.e("CoverPad", "Dual-screen session ended with error", t)
             Toast.makeText(this, "Session ended: ${t.message}", Toast.LENGTH_LONG).show()
         } else if (triggersRequested) {
-            // Session died even though we didn't explicitly stop it — most likely
-            // cause is this Activity being fully backgrounded rather than kept
-            // visible via PiP.
             Log.w("CoverPad", "Session ended unexpectedly while triggersRequested=true")
         }
     }
@@ -234,17 +284,11 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
         Log.d("CoverPad", "Cover screen container visible = $isVisible")
     }
 
-    // ── Picture-in-Picture: keep this Activity "visible" while a game runs ────
-    // The dual-screen session appears to be tied to this Activity staying
-    // visible, not just alive. Auto-entering PiP when the user leaves (rather
-    // than fully backgrounding) is the public, non-hacky way to stay "visible"
-    // while the user interacts with a different app on the main screen.
+    // ── Picture-in-Picture ─────────────────────────────────────────────────────
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (triggersRequested && windowAreaSession != null) {
-            enterPipMode()
-        }
+        if (triggersRequested && windowAreaSession != null) enterPipMode()
     }
 
     private fun enterPipMode() {
@@ -260,7 +304,14 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
         }
     }
 
-    // ── Simple app picker to launch a game directly from here ────────────────
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        // Swap to the minimal view while in PiP so the tiny floating window
+        // isn't crammed with the full button list and instructions.
+        setContentView(if (isInPictureInPictureMode) pipUiView else fullUiView)
+    }
+
+    // ── Simple app picker ──────────────────────────────────────────────────────
 
     private fun showAppPicker() {
         val pm = packageManager
@@ -275,11 +326,7 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
             .setItems(labels) { _, which ->
                 val pkg = launchables[which].packageName
                 val intent = pm.getLaunchIntentForPackage(pkg)
-                if (intent != null) {
-                    startActivity(intent)
-                    // onUserLeaveHint() fires automatically right after this,
-                    // triggering PiP if cover triggers are active.
-                }
+                if (intent != null) startActivity(intent)
             }
             .show()
     }
@@ -306,9 +353,7 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
 /**
  * Button UI shown on the cover display. Coordinates are MIRRORED horizontally
  * (both drawing and touch hit-testing) because the physical cover panel's
- * logical coordinate space runs opposite to its physically-visible left/right
- * — without this, a button placed at x=0 (logical left) appears on the
- * physical right side when viewed face-on from outside the phone.
+ * logical coordinate space runs opposite to its physically-visible left/right.
  */
 private class CoverButtonCanvasView(
     context: android.content.Context,
@@ -332,7 +377,6 @@ private class CoverButtonCanvasView(
 
     fun setEditMode(enabled: Boolean) { editMode = enabled; invalidate() }
 
-    /** Mirror an x-fraction horizontally: physical-left ↔ physical-right. */
     private fun mirrorFrac(x: Float, w: Float): Float = 1f - x - w
 
     override fun onDraw(canvas: Canvas) {
@@ -393,8 +437,6 @@ private class CoverButtonCanvasView(
     private fun onMove(x: Float, y: Float): Boolean {
         if (dragIdx < 0 || dragMode == DragMode.NONE) return false
         val btn = layout.buttons[dragIdx]
-        // Drag deltas are mirrored too, since dragging right on-screen should
-        // move the button toward the physical-right, which is logical-left.
         val dxFrac = -(x - dragStartX) / width
         val dyFrac = (y - dragStartY) / height
         layout.buttons[dragIdx] = when (dragMode) {
