@@ -89,6 +89,7 @@ class CoverOverlayService : Service() {
             }
         )
         presentation?.show()
+        updateNotification()
     }
 
     private fun buildNotification(): Notification {
@@ -97,10 +98,18 @@ class CoverOverlayService : Service() {
             nm.createNotificationChannel(NotificationChannel(
                 CHANNEL_ID, "CoverPad", NotificationManager.IMPORTANCE_LOW))
         }
+        // Surface whether cross-display dispatch is actually available on this
+        // OS build — if not, taps fall back to whatever display has focus,
+        // which likely won't reach the game while folded.
+        val bridgeStatus = if (InputInjector.isCrossDisplaySupported)
+            "Cross-display dispatch: supported ✓" else "Cross-display dispatch: NOT supported ✗"
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentTitle("CoverPad triggers active")
-            .setContentText(if (isEditMode) "Edit mode — drag to resize/move" else "Tap notification to edit")
+            .setContentText("${if (isEditMode) "Edit mode" else "Ready"} · $bridgeStatus")
+            .setStyle(NotificationCompat.BigTextStyle().bigText(
+                "${if (isEditMode) "Edit mode — drag to resize/move" else "Tap notification to edit"}\n$bridgeStatus"))
             .setContentIntent(PendingIntent.getActivity(
                 this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
             .addAction(0, if (isEditMode) "Done Editing" else "Edit Buttons", pendingIntent(ACTION_TOGGLE_EDIT))
@@ -139,9 +148,6 @@ private class CoverPresentation(
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Presentation manages its own window type internally — no manual
-        // setType() call needed (and TYPE_PRESENTATION isn't a public constant
-        // on WindowManager.LayoutParams anyway).
         canvasView = ButtonCanvasView(context)
         setContentView(canvasView)
     }
