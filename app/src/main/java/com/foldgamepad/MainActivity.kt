@@ -1,12 +1,16 @@
 package com.foldgamepad
 
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.PictureInPictureParams
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.*
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
+import android.util.Rational
 import android.view.MotionEvent
 import android.view.View
 import android.view.accessibility.AccessibilityManager
@@ -35,7 +39,6 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlin.math.sqrt
 
-/** Drag interaction states for the cover-screen edit mode. */
 private enum class DragMode { NONE, MOVE, RESIZE }
 
 class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback {
@@ -53,6 +56,7 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
     private var editModeOn = false
     private var canvasView: CoverButtonCanvasView? = null
     private var layout = CoverLayout()
+    private var triggersRequested = false   // true once user has pressed "Start"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -64,15 +68,11 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
         }
 
         root.addView(TextView(this).apply {
-            text = "CoverPad Triggers"
-            textSize = 24f
-            setPadding(0, 0, 0, 24)
+            text = "CoverPad Triggers"; textSize = 24f; setPadding(0, 0, 0, 24)
         })
 
         root.addView(TextView(this).apply {
-            text = "Dual-screen mode support:"
-            textSize = 14f
-            setPadding(0, 0, 0, 8)
+            text = "Dual-screen mode support:"; textSize = 14f; setPadding(0, 0, 0, 8)
         })
 
         val status = TextView(this).apply { text = "Checking…"; textSize = 15f; setPadding(0, 0, 0, 24) }
@@ -82,9 +82,11 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
         root.addView(TextView(this).apply {
             text = "1. Enable Accessibility below\n" +
                    "2. Calibrate targets while a game is open\n" +
-                   "3. Start cover triggers — buttons appear on the back\n" +
-                   "   screen while the phone stays open and the game runs\n" +
-                   "4. Press the edges on the back to fire taps on the game"
+                   "3. Start cover triggers\n" +
+                   "4. Tap 'Launch Game' below (or Home + reopen your game) —\n" +
+                   "   this app shrinks to a small floating bubble so the\n" +
+                   "   cover screen triggers stay alive\n" +
+                   "5. Press the edges on the back to fire taps on the game"
             textSize = 15f
             setPadding(0, 0, 0, 32)
         })
@@ -132,6 +134,13 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
             }
         })
 
+        root.addView(spacer())
+
+        root.addView(Button(this).apply {
+            text = "4. Pick a game to launch"
+            setOnClickListener { showAppPicker() }
+        })
+
         setContentView(root)
         checkDualScreenSupport()
     }
@@ -170,6 +179,7 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
         val session = windowAreaSession
         if (session != null) {
             session.close()
+            triggersRequested = false
             return
         }
         val token = windowAreaInfo?.token
@@ -177,10 +187,9 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
             Toast.makeText(this, "No rear display area available right now", Toast.LENGTH_LONG).show()
             return
         }
+        triggersRequested = true
         windowAreaController.presentContentOnWindowArea(
-            token = token,
-            activity = this,
-            executor = mainExecutor,
+            token = token, activity = this, executor = mainExecutor,
             windowAreaPresentationSessionCallback = this
         )
     }
@@ -213,11 +222,66 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
         if (t != null) {
             Log.e("CoverPad", "Dual-screen session ended with error", t)
             Toast.makeText(this, "Session ended: ${t.message}", Toast.LENGTH_LONG).show()
+        } else if (triggersRequested) {
+            // Session died even though we didn't explicitly stop it — most likely
+            // cause is this Activity being fully backgrounded rather than kept
+            // visible via PiP.
+            Log.w("CoverPad", "Session ended unexpectedly while triggersRequested=true")
         }
     }
 
     override fun onContainerVisibilityChanged(isVisible: Boolean) {
         Log.d("CoverPad", "Cover screen container visible = $isVisible")
+    }
+
+    // ── Picture-in-Picture: keep this Activity "visible" while a game runs ────
+    // The dual-screen session appears to be tied to this Activity staying
+    // visible, not just alive. Auto-entering PiP when the user leaves (rather
+    // than fully backgrounding) is the public, non-hacky way to stay "visible"
+    // while the user interacts with a different app on the main screen.
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (triggersRequested && windowAreaSession != null) {
+            enterPipMode()
+        }
+    }
+
+    private fun enterPipMode() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) return
+        try {
+            val params = PictureInPictureParams.Builder()
+                .setAspectRatio(Rational(1, 1))
+                .build()
+            enterPictureInPictureMode(params)
+        } catch (e: Exception) {
+            Log.w("CoverPad", "enterPictureInPictureMode failed: ${e.message}")
+        }
+    }
+
+    // ── Simple app picker to launch a game directly from here ────────────────
+
+    private fun showAppPicker() {
+        val pm = packageManager
+        val launchables = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+            .filter { pm.getLaunchIntentForPackage(it.packageName) != null && it.packageName != packageName }
+            .sortedBy { pm.getApplicationLabel(it).toString() }
+
+        val labels = launchables.map { pm.getApplicationLabel(it).toString() }.toTypedArray()
+
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Pick a game")
+            .setItems(labels) { _, which ->
+                val pkg = launchables[which].packageName
+                val intent = pm.getLaunchIntentForPackage(pkg)
+                if (intent != null) {
+                    startActivity(intent)
+                    // onUserLeaveHint() fires automatically right after this,
+                    // triggering PiP if cover triggers are active.
+                }
+            }
+            .show()
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -240,9 +304,11 @@ class MainActivity : AppCompatActivity(), WindowAreaPresentationSessionCallback 
 }
 
 /**
- * The button UI shown on the cover display via the dual-screen session's
- * content view. Same drag/resize/press logic as the earlier Presentation-based
- * version, just hosted inside a WindowAreaSessionPresenter's context instead.
+ * Button UI shown on the cover display. Coordinates are MIRRORED horizontally
+ * (both drawing and touch hit-testing) because the physical cover panel's
+ * logical coordinate space runs opposite to its physically-visible left/right
+ * — without this, a button placed at x=0 (logical left) appears on the
+ * physical right side when viewed face-on from outside the phone.
  */
 private class CoverButtonCanvasView(
     context: android.content.Context,
@@ -266,6 +332,9 @@ private class CoverButtonCanvasView(
 
     fun setEditMode(enabled: Boolean) { editMode = enabled; invalidate() }
 
+    /** Mirror an x-fraction horizontally: physical-left ↔ physical-right. */
+    private fun mirrorFrac(x: Float, w: Float): Float = 1f - x - w
+
     override fun onDraw(canvas: Canvas) {
         canvas.drawColor(Color.argb(30, 0, 0, 0))
         layout.buttons.forEachIndexed { i, btn ->
@@ -284,9 +353,10 @@ private class CoverButtonCanvasView(
         if (editMode) canvas.drawText("Drag to move · drag ⇲ to resize", width / 2f, height - 30f, hintP)
     }
 
-    private fun boundsOf(btn: CoverButton): RectF = RectF(
-        btn.x * width, btn.y * height, (btn.x + btn.w) * width, (btn.y + btn.h) * height
-    )
+    private fun boundsOf(btn: CoverButton): RectF {
+        val mx = mirrorFrac(btn.x, btn.w)
+        return RectF(mx * width, btn.y * height, (mx + btn.w) * width, (btn.y + btn.h) * height)
+    }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val x = event.x; val y = event.y
@@ -323,7 +393,9 @@ private class CoverButtonCanvasView(
     private fun onMove(x: Float, y: Float): Boolean {
         if (dragIdx < 0 || dragMode == DragMode.NONE) return false
         val btn = layout.buttons[dragIdx]
-        val dxFrac = (x - dragStartX) / width
+        // Drag deltas are mirrored too, since dragging right on-screen should
+        // move the button toward the physical-right, which is logical-left.
+        val dxFrac = -(x - dragStartX) / width
         val dyFrac = (y - dragStartY) / height
         layout.buttons[dragIdx] = when (dragMode) {
             DragMode.MOVE -> btn.copy(
@@ -331,7 +403,7 @@ private class CoverButtonCanvasView(
                 y = (origY + dyFrac).coerceIn(0f, 1f - btn.h)
             )
             DragMode.RESIZE -> btn.copy(
-                w = (origW + dxFrac).coerceIn(0.06f, 1f - btn.x),
+                w = (origW - dxFrac).coerceIn(0.06f, 1f - btn.x),
                 h = (origH + dyFrac).coerceIn(0.06f, 1f - btn.y)
             )
             else -> btn
