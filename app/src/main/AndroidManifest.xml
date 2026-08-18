@@ -4,9 +4,8 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
-    <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-feature android:name="android.hardware.type.foldable" android:required="false" />
 
     <application
         android:allowBackup="true"
@@ -27,12 +26,6 @@
             </intent-filter>
         </activity>
 
-        <activity
-            android:name=".AppPickerActivity"
-            android:exported="false"
-            android:screenOrientation="fullSensor"
-            android:configChanges="orientation|screenSize|screenLayout" />
-
         <service
             android:name=".service.FoldAccessibilityService"
             android:exported="true"
@@ -47,12 +40,21 @@
         </service>
 
         <service
-            android:name=".service.OverlayService"
+            android:name=".service.CoverOverlayService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="game_overlay" />
+                android:value="cover_screen_gamepad" />
+        </service>
+
+        <service
+            android:name=".service.CalibrationOverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="calibration_overlay" />
         </service>
 
     </application>
